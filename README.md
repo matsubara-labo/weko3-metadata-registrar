@@ -1,5 +1,21 @@
 # weko3-metadata-registrar
 
+## Development setup
+
+Install the Git pre-commit hook after cloning the repository:
+
+```shell
+uv sync --dev
+uv run pre-commit install
+```
+
+The hook runs Ruff before each commit to fix lint violations, sort imports, and
+format Python files. To run the same checks against the whole repository:
+
+```shell
+uv run pre-commit run --all-files
+```
+
 This repository can regenerate WEKO metadata import ZIP files from the current template TSV and source CSV.
 
 ## Current input files
