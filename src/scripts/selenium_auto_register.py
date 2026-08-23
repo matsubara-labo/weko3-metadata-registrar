@@ -16,6 +16,5 @@ if __package__ in (None, ""):
 
 from importers.selenium_auto_register import main
 
-
 if __name__ == "__main__":
     raise SystemExit(main())

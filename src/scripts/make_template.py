@@ -15,7 +15,7 @@ from typing import Any
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from generation.metadata_pipeline import DISPLAY_COLUMNS, FIELD_ATTRIBUTES
+from generation.metadata_pipeline import FIELD_ATTRIBUTES
 
 FIELD_ORDER = list(FIELD_ATTRIBUTES.keys())
 MULTI_VALUE_FIELDS = {"Creator", "Contributor", "Subject", "Description"}
@@ -52,9 +52,15 @@ FORCED_BASE_TEMPLATE_VALUES = {
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Create metadata schema JSON from a WEKO template TSV.")
-    parser.add_argument("--template", type=Path, required=True, help="Source template TSV file.")
-    parser.add_argument("--output", type=Path, required=True, help="Output JSON file path.")
+    parser = argparse.ArgumentParser(
+        description="Create metadata schema JSON from a WEKO template TSV."
+    )
+    parser.add_argument(
+        "--template", type=Path, required=True, help="Source template TSV file."
+    )
+    parser.add_argument(
+        "--output", type=Path, required=True, help="Output JSON file path."
+    )
     return parser
 
 
@@ -94,7 +100,9 @@ def classify_field(display_name: str, binding: str) -> str:
         return "Description_g"
     if normalized == "License_g":
         return "License_g"
-    raise ValueError(f"Unsupported template column: display={display_name!r}, binding={binding!r}")
+    raise ValueError(
+        f"Unsupported template column: display={display_name!r}, binding={binding!r}"
+    )
 
 
 def normalize_multi_value_pattern(value: str) -> str:
@@ -112,11 +120,17 @@ def collect_base_columns(
     base_metadata_bindings: list[str] = []
     base_count = 0
 
-    for index, (binding, display_name, attribute) in enumerate(zip(bindings, display_columns, attribute_row)):
+    for index, (binding, display_name, attribute) in enumerate(
+        zip(bindings, display_columns, attribute_row)
+    ):
         if display_name.strip() not in BASE_DISPLAY_COLUMNS:
             break
         base_metadata_bindings.append(binding)
-        if display_name in READ_FROM_TEMPLATE_BASE_COLUMNS and first_data_row and index < len(first_data_row):
+        if (
+            display_name in READ_FROM_TEMPLATE_BASE_COLUMNS
+            and first_data_row
+            and index < len(first_data_row)
+        ):
             template_value = first_data_row[index]
         elif display_name in FORCED_BASE_TEMPLATE_VALUES:
             template_value = FORCED_BASE_TEMPLATE_VALUES[display_name]
@@ -126,7 +140,12 @@ def collect_base_columns(
         template_column_attributes[display_name] = attribute
         base_count += 1
 
-    return template_column_values, template_column_attributes, base_metadata_bindings, base_count
+    return (
+        template_column_values,
+        template_column_attributes,
+        base_metadata_bindings,
+        base_count,
+    )
 
 
 def collect_field_mappings(
@@ -138,7 +157,9 @@ def collect_field_mappings(
     generated_display_columns: dict[str, Any] = {}
     generated_field_attributes: dict[str, str] = {}
 
-    for binding, display_name, attribute in zip(bindings, display_columns, attribute_row):
+    for binding, display_name, attribute in zip(
+        bindings, display_columns, attribute_row
+    ):
         field_name = classify_field(display_name, binding)
         if field_name in MULTI_VALUE_FIELDS:
             normalized_binding = normalize_multi_value_pattern(binding)
@@ -154,24 +175,44 @@ def collect_field_mappings(
         if field_name not in generated_field_attributes:
             generated_field_attributes[field_name] = attribute
 
-    missing_fields = [field_name for field_name in FIELD_ORDER if field_name not in column_bindings]
+    missing_fields = [
+        field_name for field_name in FIELD_ORDER if field_name not in column_bindings
+    ]
     if missing_fields:
-        raise ValueError(f"Template is missing required fields: {', '.join(missing_fields)}")
+        raise ValueError(
+            f"Template is missing required fields: {', '.join(missing_fields)}"
+        )
 
-    ordered_bindings = {field_name: column_bindings[field_name] for field_name in FIELD_ORDER}
-    ordered_displays = {field_name: generated_display_columns[field_name] for field_name in FIELD_ORDER}
-    ordered_attributes = {field_name: generated_field_attributes[field_name] for field_name in FIELD_ORDER}
+    ordered_bindings = {
+        field_name: column_bindings[field_name] for field_name in FIELD_ORDER
+    }
+    ordered_displays = {
+        field_name: generated_display_columns[field_name] for field_name in FIELD_ORDER
+    }
+    ordered_attributes = {
+        field_name: generated_field_attributes[field_name] for field_name in FIELD_ORDER
+    }
     return ordered_bindings, ordered_displays, ordered_attributes
 
 
-def build_default_languages(bindings: list[str], first_data_row: list[str] | None) -> dict[str, str]:
+def build_default_languages(
+    bindings: list[str], first_data_row: list[str] | None
+) -> dict[str, str]:
     if not first_data_row:
         return {}
 
-    binding_to_value = {binding: first_data_row[index] for index, binding in enumerate(bindings) if index < len(first_data_row)}
+    binding_to_value = {
+        binding: first_data_row[index]
+        for index, binding in enumerate(bindings)
+        if index < len(first_data_row)
+    }
     default_languages: dict[str, str] = {}
-    title_lang = binding_to_value.get(".metadata.item_30001_title0[0].subitem_title_language", "").strip()
-    title_g_lang = binding_to_value.get(".metadata.item_30001_alternative_title1.subitem_alternative_title_language", "").strip()
+    title_lang = binding_to_value.get(
+        ".metadata.item_30001_title0[0].subitem_title_language", ""
+    ).strip()
+    title_g_lang = binding_to_value.get(
+        ".metadata.item_30001_alternative_title1.subitem_alternative_title_language", ""
+    ).strip()
     if title_lang:
         default_languages["Title"] = title_lang
     if title_g_lang:
@@ -184,16 +225,23 @@ def create_schema_from_template(template_path: Path) -> dict[str, Any]:
     item_row, bindings, display_columns, _, attribute_row = rows[:5]
     first_data_row = rows[5] if len(rows) > 5 else None
 
-    template_column_values, template_column_attributes, base_metadata_bindings, base_count = collect_base_columns(
+    (
+        template_column_values,
+        template_column_attributes,
+        base_metadata_bindings,
+        base_count,
+    ) = collect_base_columns(
         bindings,
         display_columns,
         attribute_row,
         first_data_row,
     )
-    field_bindings, generated_display_columns, generated_field_attributes = collect_field_mappings(
-        bindings[base_count:],
-        display_columns[base_count:],
-        attribute_row[base_count:],
+    field_bindings, generated_display_columns, generated_field_attributes = (
+        collect_field_mappings(
+            bindings[base_count:],
+            display_columns[base_count:],
+            attribute_row[base_count:],
+        )
     )
 
     return {

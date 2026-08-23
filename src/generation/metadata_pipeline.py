@@ -76,7 +76,9 @@ DISPLAY_COLUMNS = {
     "License_g": ["License_g"],
 }
 
-DEFAULT_SCHEMA_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "metadata_schema_40001.json"
+DEFAULT_SCHEMA_CONFIG_PATH = (
+    Path(__file__).resolve().parents[2] / "config" / "metadata_schema_40001.json"
+)
 
 
 @dataclass(frozen=True)
@@ -116,7 +118,9 @@ class GeneratedArtifact:
 
 def load_metadata_schema(schema_config_path: Path) -> MetadataSchema:
     if not schema_config_path.exists():
-        raise FileNotFoundError(f"Metadata schema config was not found: {schema_config_path}")
+        raise FileNotFoundError(
+            f"Metadata schema config was not found: {schema_config_path}"
+        )
 
     with schema_config_path.open("r", encoding="utf-8") as file_obj:
         raw = json.load(file_obj)
@@ -134,7 +138,9 @@ def load_metadata_schema(schema_config_path: Path) -> MetadataSchema:
     )
 
 
-def build_runtime_template_values(config: MetadataGenerationConfig, schema: MetadataSchema) -> dict[str, str]:
+def build_runtime_template_values(
+    config: MetadataGenerationConfig, schema: MetadataSchema
+) -> dict[str, str]:
     values = dict(schema.template_column_values)
     if config.index_id is not None:
         values[".IndexID[0]"] = config.index_id
@@ -208,14 +214,21 @@ def load_rows(input_path: Path) -> list[dict[str, Any]]:
         return [normalize_row(row) for row in reader]
 
 
-def chunk_rows(rows: list[dict[str, Any]], chunk_size: int | None) -> list[list[dict[str, Any]]]:
+def chunk_rows(
+    rows: list[dict[str, Any]], chunk_size: int | None
+) -> list[list[dict[str, Any]]]:
     if not chunk_size or chunk_size <= 0:
         return [rows]
-    return [rows[index : index + chunk_size] for index in range(0, len(rows), chunk_size)]
+    return [
+        rows[index : index + chunk_size] for index in range(0, len(rows), chunk_size)
+    ]
 
 
 def compute_max_lengths(rows: list[dict[str, Any]]) -> dict[str, int]:
-    return {field: max((len(row[field]) for row in rows), default=0) for field in MULTI_VALUE_FIELDS}
+    return {
+        field: max((len(row[field]) for row in rows), default=0)
+        for field in MULTI_VALUE_FIELDS
+    }
 
 
 def build_dynamic_columns(
@@ -266,7 +279,9 @@ def build_value_row(
             continue
 
         if field == "Title_g":
-            values.extend([row["Title_g"], schema.default_languages.get("Title_g", "en")])
+            values.extend(
+                [row["Title_g"], schema.default_languages.get("Title_g", "en")]
+            )
             continue
 
         if field in SINGLE_VALUE_FIELDS:
@@ -288,7 +303,9 @@ def write_tsv(
 ) -> None:
     max_lengths = compute_max_lengths(rows)
     template_column_values = build_runtime_template_values(config, schema)
-    metadata_bindings, display_columns, attribute_row = build_dynamic_columns(schema, template_column_values, max_lengths)
+    metadata_bindings, display_columns, attribute_row = build_dynamic_columns(
+        schema, template_column_values, max_lengths
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # WEKO import expects UTF-8 TSVs with a BOM, matching the exported template format.
@@ -300,7 +317,9 @@ def write_tsv(
         writer.writerow(["#"] + [""] * (len(display_columns) - 1))
         writer.writerow(attribute_row)
         for row in rows:
-            writer.writerow(build_value_row(row, max_lengths, schema, template_column_values))
+            writer.writerow(
+                build_value_row(row, max_lengths, schema, template_column_values)
+            )
 
 
 def zip_tsv(tsv_path: Path, zip_path: Path) -> None:
@@ -309,8 +328,12 @@ def zip_tsv(tsv_path: Path, zip_path: Path) -> None:
         archive.write(tsv_path, Path("data") / tsv_path.name)
 
 
-def generate_metadata_artifacts(config: MetadataGenerationConfig) -> list[GeneratedArtifact]:
-    schema = load_metadata_schema(config.schema_config_path or DEFAULT_SCHEMA_CONFIG_PATH)
+def generate_metadata_artifacts(
+    config: MetadataGenerationConfig,
+) -> list[GeneratedArtifact]:
+    schema = load_metadata_schema(
+        config.schema_config_path or DEFAULT_SCHEMA_CONFIG_PATH
+    )
     rows = load_rows(config.input_path)
     if not rows:
         return []

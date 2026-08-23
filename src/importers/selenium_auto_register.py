@@ -14,7 +14,7 @@ import json
 import os
 import shutil
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -35,7 +35,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from urllib3.exceptions import ProtocolError
 
-DEFAULT_SELECTOR_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "weko_ui_selectors.json"
+DEFAULT_SELECTOR_CONFIG_PATH = (
+    Path(__file__).resolve().parents[2] / "config" / "weko_ui_selectors.json"
+)
 BY_LOOKUP = {
     "css selector": By.CSS_SELECTOR,
     "xpath": By.XPATH,
@@ -97,21 +99,31 @@ class WekoImportConfig:
         return self.zip_dir or self.base_dir / "metadatas" / "output" / "zip_data"
 
     def resolved_download_dir(self) -> Path:
-        return self.download_dir or self.base_dir / "metadatas" / "output" / "import_results"
+        return (
+            self.download_dir
+            or self.base_dir / "metadatas" / "output" / "import_results"
+        )
 
     def resolved_processed_zip_dir(self) -> Path:
-        return self.processed_zip_dir or self.base_dir / "metadatas" / "output" / "uploaded_zip_data"
+        return (
+            self.processed_zip_dir
+            or self.base_dir / "metadatas" / "output" / "uploaded_zip_data"
+        )
 
 
 def load_selector_config(selector_config_path: Path) -> WekoSelectors:
     if not selector_config_path.exists():
-        raise FileNotFoundError(f"Selector config was not found: {selector_config_path}")
+        raise FileNotFoundError(
+            f"Selector config was not found: {selector_config_path}"
+        )
 
     with selector_config_path.open("r", encoding="utf-8") as file_obj:
         raw = json.load(file_obj)
 
     def parse_candidates(key: str) -> tuple[SelectorCandidate, ...]:
-        return tuple(SelectorCandidate(by=item["by"], value=item["value"]) for item in raw[key])
+        return tuple(
+            SelectorCandidate(by=item["by"], value=item["value"]) for item in raw[key]
+        )
 
     return WekoSelectors(
         email_input=parse_candidates("email_input"),
@@ -127,7 +139,9 @@ def load_selector_config(selector_config_path: Path) -> WekoSelectors:
 def resolve_selectors(config: WekoImportConfig) -> WekoSelectors:
     if config.selectors is not None:
         return config.selectors
-    return load_selector_config(config.selector_config_path or DEFAULT_SELECTOR_CONFIG_PATH)
+    return load_selector_config(
+        config.selector_config_path or DEFAULT_SELECTOR_CONFIG_PATH
+    )
 
 
 def sorted_zip_files(zip_dir: Path) -> list[Path]:
@@ -147,15 +161,23 @@ def wait_for_candidates(
     for candidate in candidates:
         locator = candidate.as_locator()
         try:
-            return WebDriverWait(driver, timeout_per_selector).until(condition_factory(locator))
+            return WebDriverWait(driver, timeout_per_selector).until(
+                condition_factory(locator)
+            )
         except Exception as exc:
             last_error = exc
 
-    candidate_descriptions = [f"{candidate.by}={candidate.value}" for candidate in candidates]
-    raise TimeoutException(f"Could not resolve any selector from: {candidate_descriptions}") from last_error
+    candidate_descriptions = [
+        f"{candidate.by}={candidate.value}" for candidate in candidates
+    ]
+    raise TimeoutException(
+        f"Could not resolve any selector from: {candidate_descriptions}"
+    ) from last_error
 
 
-def any_candidate_present(driver: WebDriver, candidates: tuple[SelectorCandidate, ...]) -> bool:
+def any_candidate_present(
+    driver: WebDriver, candidates: tuple[SelectorCandidate, ...]
+) -> bool:
     for candidate in candidates:
         try:
             if driver.find_elements(*candidate.as_locator()):
@@ -165,19 +187,33 @@ def any_candidate_present(driver: WebDriver, candidates: tuple[SelectorCandidate
     return False
 
 
-def wait_for_visible(driver: WebDriver, candidates: tuple[SelectorCandidate, ...], timeout_ms: int) -> WebElement:
-    return wait_for_candidates(driver, candidates, timeout_ms, EC.visibility_of_element_located)
+def wait_for_visible(
+    driver: WebDriver, candidates: tuple[SelectorCandidate, ...], timeout_ms: int
+) -> WebElement:
+    return wait_for_candidates(
+        driver, candidates, timeout_ms, EC.visibility_of_element_located
+    )
 
 
-def wait_for_present(driver: WebDriver, candidates: tuple[SelectorCandidate, ...], timeout_ms: int) -> WebElement:
-    return wait_for_candidates(driver, candidates, timeout_ms, EC.presence_of_element_located)
+def wait_for_present(
+    driver: WebDriver, candidates: tuple[SelectorCandidate, ...], timeout_ms: int
+) -> WebElement:
+    return wait_for_candidates(
+        driver, candidates, timeout_ms, EC.presence_of_element_located
+    )
 
 
-def wait_for_clickable(driver: WebDriver, candidates: tuple[SelectorCandidate, ...], timeout_ms: int) -> WebElement:
-    return wait_for_candidates(driver, candidates, timeout_ms, EC.element_to_be_clickable)
+def wait_for_clickable(
+    driver: WebDriver, candidates: tuple[SelectorCandidate, ...], timeout_ms: int
+) -> WebElement:
+    return wait_for_candidates(
+        driver, candidates, timeout_ms, EC.element_to_be_clickable
+    )
 
 
-def wait_for_enabled(driver: WebDriver, candidates: tuple[SelectorCandidate, ...], timeout_ms: int) -> WebElement:
+def wait_for_enabled(
+    driver: WebDriver, candidates: tuple[SelectorCandidate, ...], timeout_ms: int
+) -> WebElement:
     last_error: Exception | None = None
     attempts = max(1, len(candidates))
     timeout_per_selector = max(1.0, timeout_ms / 1000 / attempts)
@@ -185,6 +221,7 @@ def wait_for_enabled(driver: WebDriver, candidates: tuple[SelectorCandidate, ...
     for candidate in candidates:
         locator = candidate.as_locator()
         try:
+
             def enabled_element(d: WebDriver) -> WebElement | bool:
                 element = d.find_element(*locator)
                 return element if element_is_enabled(element) else False
@@ -193,8 +230,12 @@ def wait_for_enabled(driver: WebDriver, candidates: tuple[SelectorCandidate, ...
         except Exception as exc:
             last_error = exc
 
-    candidate_descriptions = [f"{candidate.by}={candidate.value}" for candidate in candidates]
-    raise TimeoutException(f"Could not resolve any enabled selector from: {candidate_descriptions}") from last_error
+    candidate_descriptions = [
+        f"{candidate.by}={candidate.value}" for candidate in candidates
+    ]
+    raise TimeoutException(
+        f"Could not resolve any enabled selector from: {candidate_descriptions}"
+    ) from last_error
 
 
 def element_is_enabled(element: WebElement) -> bool:
@@ -208,7 +249,11 @@ def click_element(driver: WebDriver, element: WebElement) -> None:
     try:
         element.click()
         return
-    except (ElementClickInterceptedException, JavascriptException, StaleElementReferenceException):
+    except (
+        ElementClickInterceptedException,
+        JavascriptException,
+        StaleElementReferenceException,
+    ):
         pass
     driver.execute_script("arguments[0].click();", element)
 
@@ -231,7 +276,9 @@ def click_when_ready(
         click_element(driver, element)
         return
     except Exception as exc:
-        candidate_descriptions = [f"{candidate.by}={candidate.value}" for candidate in candidates]
+        candidate_descriptions = [
+            f"{candidate.by}={candidate.value}" for candidate in candidates
+        ]
         messages = collect_page_messages(driver)
         message_suffix = f"; page_messages={messages}" if messages else ""
         raise TimeoutException(
@@ -262,16 +309,24 @@ def prepare_file_input(driver: WebDriver, file_input: WebElement) -> WebElement:
     return file_input
 
 
-def wait_for_download(download_dir: Path, previous_files: set[str], timeout_ms: int) -> Path:
+def wait_for_download(
+    download_dir: Path, previous_files: set[str], timeout_ms: int
+) -> Path:
     deadline = time.time() + timeout_ms / 1000
     while time.time() < deadline:
         current_files = {path.name for path in download_dir.iterdir() if path.is_file()}
         new_files = sorted(current_files - previous_files)
-        completed = [name for name in new_files if not name.endswith((".crdownload", ".tmp", ".part"))]
+        completed = [
+            name
+            for name in new_files
+            if not name.endswith((".crdownload", ".tmp", ".part"))
+        ]
         if completed:
             return download_dir / completed[0]
         time.sleep(POLL_INTERVAL_SECONDS)
-    raise TimeoutException(f"Timed out waiting for a completed download in {download_dir}")
+    raise TimeoutException(
+        f"Timed out waiting for a completed download in {download_dir}"
+    )
 
 
 def collect_page_messages(driver: WebDriver) -> list[str]:
@@ -293,7 +348,9 @@ def collect_page_messages(driver: WebDriver) -> list[str]:
         body_text = ""
     normalized_body = " ".join(body_text.split())
     for keyword in WEKO_FATAL_MESSAGE_KEYWORDS:
-        if keyword in normalized_body.lower() and keyword not in [message.lower() for message in messages]:
+        if keyword in normalized_body.lower() and keyword not in [
+            message.lower() for message in messages
+        ]:
             messages.append(keyword)
 
     return messages
@@ -350,7 +407,9 @@ def unique_destination_path(destination_dir: Path, original_name: str) -> Path:
         candidate = destination_dir / f"{stem}_{index:03d}{suffix}"
         if not candidate.exists():
             return candidate
-    raise RuntimeError(f"Could not determine a unique destination path for {original_name} in {destination_dir}")
+    raise RuntimeError(
+        f"Could not determine a unique destination path for {original_name} in {destination_dir}"
+    )
 
 
 def finalize_imported_zip(zip_path: Path, config: WekoImportConfig) -> Path | None:
@@ -392,7 +451,10 @@ def driver_session_lost(exc: BaseException) -> bool:
         seen.add(id(current))
         if isinstance(current, (InvalidSessionIdException, NoSuchWindowException)):
             return True
-        if isinstance(current, WebDriverException) and "invalid session id" in str(current).lower():
+        if (
+            isinstance(current, WebDriverException)
+            and "invalid session id" in str(current).lower()
+        ):
             return True
         current = current.__cause__ or current.__context__
     return False
@@ -450,7 +512,9 @@ def build_chrome_options(download_dir: Path, headless: bool) -> Options:
 
 
 def create_driver(config: WekoImportConfig, download_dir: Path) -> WebDriver:
-    driver = webdriver.Chrome(options=build_chrome_options(download_dir, config.headless))
+    driver = webdriver.Chrome(
+        options=build_chrome_options(download_dir, config.headless)
+    )
     if not config.headless:
         driver.maximize_window()
     return driver
@@ -482,9 +546,15 @@ def login(driver: WebDriver, config: WekoImportConfig) -> None:
     selectors = config.selectors or resolve_selectors(config)
     username, password, _weko_url = load_env_settings(config.base_dir)
     driver.get(config.login_url)
-    wait_for_visible(driver, selectors.email_input, config.ui_timeout_ms).send_keys(username)
-    wait_for_visible(driver, selectors.password_input, config.ui_timeout_ms).send_keys(password)
-    click_when_ready(driver, selectors.login_button, config.ui_timeout_ms, "login button")
+    wait_for_visible(driver, selectors.email_input, config.ui_timeout_ms).send_keys(
+        username
+    )
+    wait_for_visible(driver, selectors.password_input, config.ui_timeout_ms).send_keys(
+        password
+    )
+    click_when_ready(
+        driver, selectors.login_button, config.ui_timeout_ms, "login button"
+    )
     deadline = time.time() + config.post_login_timeout_ms / 1000
     while time.time() < deadline:
         current_url = ""
@@ -494,7 +564,9 @@ def login(driver: WebDriver, config: WekoImportConfig) -> None:
             pass
         if "login" not in current_url:
             return
-        if not any_candidate_present(driver, selectors.email_input) and not any_candidate_present(driver, selectors.password_input):
+        if not any_candidate_present(
+            driver, selectors.email_input
+        ) and not any_candidate_present(driver, selectors.password_input):
             return
         time.sleep(POLL_INTERVAL_SECONDS)
 
@@ -505,18 +577,22 @@ def login(driver: WebDriver, config: WekoImportConfig) -> None:
     except TimeoutException:
         messages = collect_page_messages(driver)
         message_suffix = f"; page_messages={messages}" if messages else ""
-        raise TimeoutException(f"WEKO login did not complete; {describe_driver_state(driver)}{message_suffix}")
+        raise TimeoutException(
+            f"WEKO login did not complete; {describe_driver_state(driver)}{message_suffix}"
+        )
 
 
-def import_one_zip(driver: WebDriver, zip_path: Path, download_dir: Path, config: WekoImportConfig) -> Path:
+def import_one_zip(
+    driver: WebDriver, zip_path: Path, download_dir: Path, config: WekoImportConfig
+) -> Path:
     selectors = config.selectors or resolve_selectors(config)
     driver.get(config.import_url)
     try:
-        file_input = wait_for_present(driver, selectors.file_input, config.ui_timeout_ms)
+        file_input = wait_for_present(
+            driver, selectors.file_input, config.ui_timeout_ms
+        )
     except TimeoutException as exc:
-        raise TimeoutException(
-            f"{exc.msg}; {describe_driver_state(driver)}"
-        ) from exc
+        raise TimeoutException(f"{exc.msg}; {describe_driver_state(driver)}") from exc
     prepare_file_input(driver, file_input).send_keys(str(zip_path.resolve()))
     click_when_ready(driver, selectors.load_button, config.ui_timeout_ms, "load button")
     wait_for_step_ready_or_page_error(
@@ -526,10 +602,14 @@ def import_one_zip(driver: WebDriver, zip_path: Path, download_dir: Path, config
         "load",
         config.load_timeout_ms,
     )
-    click_when_ready(driver, selectors.import_button, config.load_timeout_ms, "import button")
+    click_when_ready(
+        driver, selectors.import_button, config.load_timeout_ms, "import button"
+    )
     assert_no_weko_page_error(driver, zip_path, "import")
     previous_files = {path.name for path in download_dir.iterdir() if path.is_file()}
-    click_when_ready(driver, selectors.download_button, config.import_timeout_ms, "download button")
+    click_when_ready(
+        driver, selectors.download_button, config.import_timeout_ms, "download button"
+    )
     return wait_for_download(download_dir, previous_files, config.download_timeout_ms)
 
 
@@ -570,9 +650,13 @@ def run_import(config: WekoImportConfig) -> list[tuple[Path, Path]]:
                 break
             except Exception as exc:
                 last_error = exc
-                if attempt == MAX_IMPORT_ATTEMPTS or not (driver_session_lost(exc) or driver_connection_lost(exc)):
+                if attempt == MAX_IMPORT_ATTEMPTS or not (
+                    driver_session_lost(exc) or driver_connection_lost(exc)
+                ):
                     raise
-                print(f"[{index}/{total}] retrying after driver disconnect on attempt {attempt}: {type(exc).__name__}")
+                print(
+                    f"[{index}/{total}] retrying after driver disconnect on attempt {attempt}: {type(exc).__name__}"
+                )
                 time.sleep(DRIVER_RETRY_DELAY_SECONDS)
             finally:
                 if driver is not None:
@@ -588,11 +672,19 @@ def run_import(config: WekoImportConfig) -> list[tuple[Path, Path]]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Import WEKO metadata zip files with Selenium.")
-    parser.add_argument("--base-dir", type=Path, default=Path(__file__).resolve().parents[3])
+    parser = argparse.ArgumentParser(
+        description="Import WEKO metadata zip files with Selenium."
+    )
+    parser.add_argument(
+        "--base-dir", type=Path, default=Path(__file__).resolve().parents[3]
+    )
     parser.add_argument("--login-url", default="https://localhost:8443/login/?next=%2F")
-    parser.add_argument("--import-url", default="https://localhost:8443/admin/items/import/")
-    parser.add_argument("--selector-config", type=Path, help="Selector config json file.")
+    parser.add_argument(
+        "--import-url", default="https://localhost:8443/admin/items/import/"
+    )
+    parser.add_argument(
+        "--selector-config", type=Path, help="Selector config json file."
+    )
     parser.add_argument("--zip-dir", type=Path)
     parser.add_argument("--download-dir", type=Path)
     parser.add_argument("--headless", action="store_true")

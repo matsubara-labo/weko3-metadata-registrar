@@ -10,7 +10,10 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from generation.metadata_pipeline import generate_metadata_artifacts, summarize_artifacts
+from generation.metadata_pipeline import (
+    generate_metadata_artifacts,
+    summarize_artifacts,
+)
 from generation.presets import build_chunked_zip_export_config
 
 
