@@ -1,0 +1,135 @@
+{
+  "item_type_name": "ResearchArtifact(40001)",
+  "item_schema_url": "https://133.167.95.87/items/jsonschema/40001",
+  "base_metadata_bindings": [
+    "#.id",
+    ".uri",
+    ".metadata.path[0]",
+    ".pos_index[0]",
+    ".publish_status",
+    ".feedback_mail[0]",
+    ".researchmap_linkage",
+    ".cnri",
+    ".doi_ra",
+    ".doi",
+    ".edit_mode",
+    ".metadata.pubdate"
+  ],
+  "template_column_values": {
+    "#ID": "",
+    "URI": "",
+    ".IndexID[0]": "1623632832836",
+    ".POS_INDEX[0]": "S2ORC",
+    ".PUBLISH_STATUS": "public",
+    ".FEEDBACK_MAIL[0]": "",
+    ".RESEAECHMAP_LINKAGE": "",
+    ".CNRI": "",
+    ".DOI_RA": "",
+    ".DOI": "",
+    "Keep/Upgrade Version": "keep",
+    "PubDate": "2025-05-27"
+  },
+  "template_column_attributes": {
+    "#ID": "#",
+    "URI": "",
+    ".IndexID[0]": "Allow Multiple",
+    ".POS_INDEX[0]": "Allow Multiple",
+    ".PUBLISH_STATUS": "Required",
+    ".FEEDBACK_MAIL[0]": "Allow Multiple",
+    ".RESEAECHMAP_LINKAGE": "",
+    ".CNRI": "",
+    ".DOI_RA": "",
+    ".DOI": "",
+    "Keep/Upgrade Version": "Required",
+    "PubDate": "Hide, Required"
+  },
+  "column_bindings": {
+    "Title": [
+      ".metadata.item_30001_title0[0].subitem_title",
+      ".metadata.item_30001_title0[0].subitem_title_language"
+    ],
+    "Title_g": [
+      ".metadata.item_30001_alternative_title1.subitem_alternative_title",
+      ".metadata.item_30001_alternative_title1.subitem_alternative_title_language"
+    ],
+    "corpusid": [
+      ".metadata.item_1748316538548"
+    ],
+    "URI": [
+      ".metadata.item_1748316595513"
+    ],
+    "Creator": ".metadata.item_1748316642067[{index}].interim",
+    "Contributor": ".metadata.item_1748316663969[{index}].interim",
+    "Contributor_g": [
+      ".metadata.item_1748317876851"
+    ],
+    "PublicationYear_g": [
+      ".metadata.item_1748316953368"
+    ],
+    "ResourceType": [
+      ".metadata.item_1748316686668"
+    ],
+    "Subject": ".metadata.item_1748316693747[{index}].interim",
+    "Description": ".metadata.item_1748316700636[{index}].interim",
+    "Description_g": [
+      ".metadata.item_1748316707259"
+    ],
+    "License_g": [
+      ".metadata.item_1748316717367"
+    ]
+  },
+  "display_columns": {
+    "Title": [
+      "Title[0].タイトル",
+      "Title[0].言語"
+    ],
+    "Title_g": [
+      "Title_g.その他のタイトル",
+      "Title_g.言語"
+    ],
+    "corpusid": [
+      "corpusid"
+    ],
+    "URI": [
+      "URI"
+    ],
+    "Creator": "Creator[{index}].None",
+    "Contributor": "Contributor[{index}].None",
+    "Contributor_g": [
+      "Contributor_g"
+    ],
+    "PublicationYear_g": [
+      "PublicationYear_g"
+    ],
+    "ResourceType": [
+      "ResourceType"
+    ],
+    "Subject": "Subject[{index}].None",
+    "Description": "Description[{index}].None",
+    "Description_g": [
+      "Description_g"
+    ],
+    "License_g": [
+      "License_g"
+    ]
+  },
+  "field_attributes": {
+    "Title": "Required, Allow Multiple",
+    "Title_g": "",
+    "corpusid": "Hide",
+    "URI": "",
+    "Creator": "Allow Multiple",
+    "Contributor": "Allow Multiple",
+    "Contributor_g": "",
+    "PublicationYear_g": "",
+    "ResourceType": "",
+    "Subject": "Allow Multiple",
+    "Description": "Allow Multiple",
+    "Description_g": "",
+    "License_g": ""
+  },
+  "default_languages": {
+    "Title": "en",
+    "Title_g": "en"
+  }
+}
