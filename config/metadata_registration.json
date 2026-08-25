@@ -1,0 +1,14 @@
+{
+  "weko_base_url": "https://133.167.95.87",
+  "item_type_export": "../sample/config/ItemType_export_sample.zip",
+  "indexes": {
+    "S2ORC": "1623632832836",
+    "PWCD": "1776751280302"
+  },
+  "default_index": "S2ORC",
+  "publish_date": "2025-05-27",
+  "default_languages": {
+    "Title": "en",
+    "Title_g": "en"
+  }
+}
