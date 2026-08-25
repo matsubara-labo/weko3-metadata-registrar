@@ -552,11 +552,6 @@ def resolve_weko_base_url(config: WekoImportConfig) -> str:
     if config.weko_base_url is not None:
         return normalize_weko_base_url(config.weko_base_url, "CLI")
 
-    load_dotenv(config.base_dir / ".env")
-    env_base_url = os.environ.get("WEKO_URL")
-    if env_base_url:
-        return normalize_weko_base_url(env_base_url, "WEKO_URL")
-
     settings = load_registration_settings(config.registration_config_path)
     return normalize_weko_base_url(
         settings.weko_base_url, str(config.registration_config_path)
@@ -699,7 +694,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-dir", type=Path, default=REPOSITORY_ROOT)
     parser.add_argument(
         "--weko-base-url",
-        help="WEKO base URL. Overrides WEKO_URL and registration config.",
+        help="WEKO base URL. Overrides the registration config.",
     )
     parser.add_argument(
         "--registration-config",
