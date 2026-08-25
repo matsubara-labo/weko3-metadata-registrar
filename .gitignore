@@ -1,3 +1,6 @@
 .env
 source_data
 **/__pycache__/
+.venv/
+.ruff_cache/
+output/
