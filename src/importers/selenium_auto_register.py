@@ -35,9 +35,13 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from urllib3.exceptions import ProtocolError
 
-DEFAULT_SELECTOR_CONFIG_PATH = (
-    Path(__file__).resolve().parents[2] / "config" / "weko_ui_selectors.json"
+from generation.registration_config import load_registration_settings
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_REGISTRATION_CONFIG_PATH = (
+    REPOSITORY_ROOT / "config" / "metadata_registration.json"
 )
+DEFAULT_SELECTOR_CONFIG_PATH = REPOSITORY_ROOT / "config" / "weko_ui_selectors.json"
 BY_LOOKUP = {
     "css selector": By.CSS_SELECTOR,
     "xpath": By.XPATH,
@@ -77,9 +81,9 @@ class WekoSelectors:
 
 @dataclass(frozen=True)
 class WekoImportConfig:
-    base_dir: Path
-    login_url: str = "https://localhost:8443/login/?next=%2F"
-    import_url: str = "https://localhost:8443/admin/items/import/"
+    base_dir: Path = REPOSITORY_ROOT
+    weko_base_url: str | None = None
+    registration_config_path: Path = DEFAULT_REGISTRATION_CONFIG_PATH
     zip_dir: Path | None = None
     download_dir: Path | None = None
     headless: bool = False
@@ -95,20 +99,27 @@ class WekoImportConfig:
     selector_config_path: Path | None = DEFAULT_SELECTOR_CONFIG_PATH
     selectors: WekoSelectors | None = None
 
+    @property
+    def login_url(self) -> str:
+        return f"{self._required_base_url()}/login/?next=%2F"
+
+    @property
+    def import_url(self) -> str:
+        return f"{self._required_base_url()}/admin/items/import/"
+
+    def _required_base_url(self) -> str:
+        if self.weko_base_url is None:
+            raise RuntimeError("WEKO base URL has not been resolved")
+        return self.weko_base_url.rstrip("/")
+
     def resolved_zip_dir(self) -> Path:
-        return self.zip_dir or self.base_dir / "metadatas" / "output" / "zip_data"
+        return self.zip_dir or self.base_dir / "output" / "zip_data"
 
     def resolved_download_dir(self) -> Path:
-        return (
-            self.download_dir
-            or self.base_dir / "metadatas" / "output" / "import_results"
-        )
+        return self.download_dir or self.base_dir / "output" / "import_results"
 
     def resolved_processed_zip_dir(self) -> Path:
-        return (
-            self.processed_zip_dir
-            or self.base_dir / "metadatas" / "output" / "uploaded_zip_data"
-        )
+        return self.processed_zip_dir or self.base_dir / "output" / "uploaded_zip_data"
 
 
 def load_selector_config(selector_config_path: Path) -> WekoSelectors:
@@ -520,31 +531,41 @@ def create_driver(config: WekoImportConfig, download_dir: Path) -> WebDriver:
     return driver
 
 
-def load_env_settings(base_dir: Path) -> tuple[str, str, str | None]:
+def load_env_settings(base_dir: Path) -> tuple[str, str]:
     env_path = base_dir / ".env"
     load_dotenv(env_path)
     username = os.environ.get("WEKO_EMAIL")
     password = os.environ.get("WEKO_PASSWORD")
     if not username or not password:
         raise RuntimeError(f"WEKO_EMAIL or WEKO_PASSWORD is not set in {env_path}")
-    weko_url = os.environ.get("WEKO_URL")
-    return username, password, weko_url
+    return username, password
 
 
-def apply_env_urls(config: WekoImportConfig) -> WekoImportConfig:
-    _username, _password, weko_url = load_env_settings(config.base_dir)
-    if not weko_url:
-        return config
+def normalize_weko_base_url(base_url: str, source: str) -> str:
+    normalized = base_url.rstrip("/")
+    if not normalized:
+        raise RuntimeError(f"WEKO base URL from {source} is empty")
+    return normalized
 
-    base_url = weko_url.rstrip("/")
-    login_url = f"{base_url}/login/?next=%2F"
-    import_url = f"{base_url}/admin/items/import/"
-    return replace(config, login_url=login_url, import_url=import_url)
+
+def resolve_weko_base_url(config: WekoImportConfig) -> str:
+    if config.weko_base_url is not None:
+        return normalize_weko_base_url(config.weko_base_url, "CLI")
+
+    load_dotenv(config.base_dir / ".env")
+    env_base_url = os.environ.get("WEKO_URL")
+    if env_base_url:
+        return normalize_weko_base_url(env_base_url, "WEKO_URL")
+
+    settings = load_registration_settings(config.registration_config_path)
+    return normalize_weko_base_url(
+        settings.weko_base_url, str(config.registration_config_path)
+    )
 
 
 def login(driver: WebDriver, config: WekoImportConfig) -> None:
     selectors = config.selectors or resolve_selectors(config)
-    username, password, _weko_url = load_env_settings(config.base_dir)
+    username, password = load_env_settings(config.base_dir)
     driver.get(config.login_url)
     wait_for_visible(driver, selectors.email_input, config.ui_timeout_ms).send_keys(
         username
@@ -614,7 +635,7 @@ def import_one_zip(
 
 
 def run_import(config: WekoImportConfig) -> list[tuple[Path, Path]]:
-    config = apply_env_urls(config)
+    config = replace(config, weko_base_url=resolve_weko_base_url(config))
     config = replace(config, selectors=resolve_selectors(config))
     zip_dir = config.resolved_zip_dir()
     if not zip_dir.exists():
@@ -675,12 +696,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Import WEKO metadata zip files with Selenium."
     )
+    parser.add_argument("--base-dir", type=Path, default=REPOSITORY_ROOT)
     parser.add_argument(
-        "--base-dir", type=Path, default=Path(__file__).resolve().parents[3]
+        "--weko-base-url",
+        help="WEKO base URL. Overrides WEKO_URL and registration config.",
     )
-    parser.add_argument("--login-url", default="https://localhost:8443/login/?next=%2F")
     parser.add_argument(
-        "--import-url", default="https://localhost:8443/admin/items/import/"
+        "--registration-config",
+        type=Path,
+        default=DEFAULT_REGISTRATION_CONFIG_PATH,
+        help="Registration config JSON file.",
     )
     parser.add_argument(
         "--selector-config", type=Path, help="Selector config json file."
@@ -704,8 +729,8 @@ def main() -> int:
     args = build_parser().parse_args()
     config = WekoImportConfig(
         base_dir=args.base_dir,
-        login_url=args.login_url,
-        import_url=args.import_url,
+        weko_base_url=args.weko_base_url,
+        registration_config_path=args.registration_config,
         selector_config_path=args.selector_config,
         zip_dir=args.zip_dir,
         download_dir=args.download_dir,
