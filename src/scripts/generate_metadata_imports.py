@@ -12,6 +12,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from generation.metadata_pipeline import (
+    DEFAULT_REGISTRATION_CONFIG_PATH,
     MetadataGenerationConfig,
     generate_metadata_artifacts,
     summarize_artifacts,
@@ -28,21 +29,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output-dir", type=Path, required=True, help="Directory for generated files."
     )
-    parser.add_argument("--schema-config", type=Path, help="Metadata schema json file.")
     parser.add_argument(
-        "--index-id", help="WEKO index id. If omitted, use the value in schema config."
+        "--registration-config",
+        type=Path,
+        default=DEFAULT_REGISTRATION_CONFIG_PATH,
+        help="Registration config JSON file. Uses config/metadata_registration.json by default.",
     )
     parser.add_argument(
         "--index-name",
-        help="WEKO index name. If omitted, use the value in schema config.",
+        help="WEKO index name. If omitted, use default_index from registration config.",
     )
     parser.add_argument(
         "--publish-date",
-        help="Publish date in YYYY-MM-DD format. If omitted, use the value in schema config.",
-    )
-    parser.add_argument(
-        "--publish-status",
-        help="WEKO publish status. If omitted, use the value in schema config.",
+        help="Publish date in YYYY-MM-DD format. If omitted, use registration config.",
     )
     parser.add_argument(
         "--chunk-size",
@@ -66,14 +65,12 @@ def main() -> int:
     config = MetadataGenerationConfig(
         input_path=args.input,
         output_dir=args.output_dir,
-        schema_config_path=args.schema_config,
-        index_id=args.index_id,
         index_name=args.index_name,
         publish_date=args.publish_date,
-        publish_status=args.publish_status,
         chunk_size=args.chunk_size or None,
         zip_outputs=args.zip,
         keep_tsv=args.keep_tsv or not args.zip,
+        registration_config_path=args.registration_config,
     )
     artifacts = generate_metadata_artifacts(config)
     print(summarize_artifacts(artifacts))
