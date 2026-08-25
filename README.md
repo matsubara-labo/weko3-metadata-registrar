@@ -1,73 +1,95 @@
 # weko3-metadata-registrar
 
-## Development setup
+WEKOのItem TypeエクスポートとCSV/TSVデータから、メタデータ一括登録用のTSVまたはZIPを生成します。
 
-Install the Git pre-commit hook after cloning the repository:
+## Development setup
 
 ```shell
 uv sync --dev
 uv run pre-commit install
 ```
 
-The hook runs Ruff before each commit to fix lint violations, sort imports, and
-format Python files. To run the same checks against the whole repository:
+コードチェックとテストは次のコマンドで実行できます。
 
 ```shell
 uv run pre-commit run --all-files
+PYTHONPATH=src uv run python -m unittest discover -s tests -v
 ```
 
-This repository can regenerate WEKO metadata import ZIP files from the current template TSV and source CSV.
+## 設定
 
-## Current input files
+[config/metadata_registration.json](config/metadata_registration.json) に、環境ごとの値と利用するItem Typeエクスポートを設定します。
 
-- Template TSV: `metadatas\template\ResearchArtifact(40001).tsv`
-- Source CSV: `metadatas\watanabe_data\sample.csv`
-
-## Output files
-
-- Schema JSON: `metadatas\config\metadata_schema_40001.json`
-- ZIP files: `metadatas\output\zip_data\import_*.zip`
-
-## Commands
-
-Run the following commands from the repository root in PowerShell.
-
-```powershell
-Set-Location C:\Users\Koshi\dataeco
+```json
+{
+  "weko_base_url": "https://133.167.95.87",
+  "item_type_export": "../sample/config/ItemType_export_sample.zip",
+  "indexes": {
+    "S2ORC": "1623632832836",
+    "PWCD": "1776751280302"
+  },
+  "default_index": "S2ORC",
+  "publish_date": "2025-05-27",
+  "default_languages": {
+    "Title": "en",
+    "Title_g": "en"
+  }
+}
 ```
 
-```powershell
-uv run --project metadatas python metadatas\src\scripts\make_template.py `
-  --template "metadatas\template\ResearchArtifact(40001).tsv" `
-  --output "metadatas\config\metadata_schema_40001.json"
-```
+- `item_type_export` の相対パスは、この設定ファイルがあるディレクトリを基準に解決されます。
+- `indexes` はIndex名をキー、IndexIDを値として登録します。
+- `default_index` はCLIで `--index-name` を省略したときに使用するIndex名です。
+- `weko_base_url` とエクスポート内のItem Type IDから、Item Schema URLを組み立てます。
+- `default_languages` は、言語子項目へ設定する既定値を入力列名ごとに指定します。
 
-```powershell
-uv run --project metadatas python metadatas\src\scripts\generate_metadata_imports.py `
-  --input "metadatas\watanabe_data\sample.csv" `
-  --output-dir "metadatas\output\zip_data" `
-  --schema-config "metadatas\config\metadata_schema_40001.json" `
-  --chunk-size 50 `
+### WEKOインポート制御列
+
+Item Typeのメタデータ項目ではない制御列は、次の方針で生成します。
+
+| 列 | 登録値 | 属性 |
+|---|---|---|
+| `#ID`, `URI` | 空欄 | WEKOインポート形式の固定値 |
+| `.IndexID[0]`, `.POS_INDEX[0]` | `indexes` / `default_index` | `Allow Multiple` |
+| `.PUBLISH_STATUS` | `public` | `Required` |
+| `.FEEDBACK_MAIL[0]`, `.RESEAECHMAP_LINKAGE`, `.CNRI`, `.DOI_RA`, `.DOI` | 空欄 | WEKOインポート形式の固定値 |
+| `Keep/Upgrade Version` | `keep` | `Required` |
+| `PubDate` | `publish_date` | Item Type ZIPの `render.meta_fix.pubdate.option`から取得 |
+
+## Item Typeエクスポート
+
+WEKOから機械的にエクスポートしたZIPを、そのまま `item_type_export` に指定します。手動での展開やJSON編集は不要です。
+
+生成処理はZIP内のファイルを次のように使用します。
+
+- `ItemType.json`: Item Type ID、項目順、項目名、内部キー、型、必須・非表示・複数可設定
+- `ItemTypeName.json`: Item Type名
+
+単一値、子要素を1つ持つ繰り返し項目、および「値1つ＋言語」の複合項目を扱います。値を入れる子要素が複数あり一意に決められないItem Typeは、誤ったTSVを生成せずエラーにします。
+
+## 生成コマンド
+
+リポジトリルートで実行します。
+
+```shell
+uv run python src/scripts/generate_metadata_imports.py \
+  --input source_data/sample.csv \
+  --output-dir output/zip_data \
+  --registration-config config/metadata_registration.json \
+  --chunk-size 50 \
   --zip
 ```
 
-## Fixed rules used when creating JSON from TSV
+設定内の別Indexを選択する場合は、Index名を指定します。IndexIDは `indexes` から解決されます。
 
-The schema JSON is created from the template TSV with the following rules.
+```shell
+uv run python src/scripts/generate_metadata_imports.py \
+  --input source_data/sample.csv \
+  --output-dir output/zip_data \
+  --index-name PWCD \
+  --zip
+```
 
-- `.IndexID[0]`, `.POS_INDEX[0]`, and `.PUBLISH_STATUS` are read from the first data row in the template TSV.
-- `PubDate` is always set to `2025-05-27`.
-- `#ID`, `URI`, `.FEEDBACK_MAIL[0]`, `.CNRI`, `.DOI_RA`, and `.DOI` are always set to blank.
+`--publish-date` は設定値を一時的に上書きできます。公開状態はWEKO登録方針として常に `public`、Keep/Upgrade Versionは常に `keep` です。それ以外の固定制御値は、IndexID・Index名・PubDateを除いて空欄です。`--zip --keep-tsv` を指定すると、ZIP内に格納したTSVも出力ディレクトリに残します。
 
-If you want to change `.IndexID[0]` or `.POS_INDEX[0]`, update the first data row in `metadatas\template\ResearchArtifact(40001).tsv` before running `make_template.py`.
-
-## Notes
-
-- `uv run --project metadatas ...` uses `metadatas\pyproject.toml`.
-- `generate_metadata_imports.py` can omit `--index-id`, `--index-name`, `--publish-date`, and `--publish-status`.
-- If they are omitted, the values in `metadata_schema_40001.json` are used.
-- `--zip` creates ZIP files and removes intermediate TSV files.
-- If you want to keep TSV files as well, use `--zip --keep-tsv`.
-- Generated TSV files are written as `UTF-8 with BOM` to match WEKO's import format expectations.
-- `selenium_auto_register.py` now moves successfully uploaded ZIP files to `metadatas\output\uploaded_zip_data` by default, so they are not uploaded again on the next run.
-- If you want to delete them instead, use `--delete-zip-after-import`. If you want to keep them in place, use `--keep-zip-after-import`.
+生成TSVはWEKOのインポート形式に合わせてUTF-8 BOM付きで出力されます。
