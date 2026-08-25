@@ -257,3 +257,22 @@ Item Typeのメタデータ項目ではない制御列は、次の方針で生�
 | `.FEEDBACK_MAIL[0]`, `.RESEAECHMAP_LINKAGE`, `.CNRI`, `.DOI_RA`, `.DOI` | 空欄 | WEKOインポート形式の固定値 |
 | `Keep/Upgrade Version` | `keep` | `Required` |
 | `PubDate` | `publish_date` | Item Type ZIPの `render.meta_fix.pubdate.option` から取得した属性 |
+
+## 関連論文等
+
+本レポジトリのコードは、以下の論文におけるメタデータの収載に用いたものです。
+```bibtex
+@article{axies2025,
+  title   = {研究データのオープンアクセスを加速化する：生成AIを用いたメタデータ生成と機関リポジトリへの収載},
+  author  = {渡邉 優 and 茂木 光志 and 松原 茂樹},
+  journal = {大学ICT推進協議会年次大会論文集},
+  volume  = {2025},
+  number  = {},
+  pages   = {702-708},
+  year    = {2025},
+  doi     = {10.24669/axies.2025.0\_702}
+}
+```
+
+収載されたメタデータは以下で公開されています。
+[https://scholar.jp](https://scholar.jp)
