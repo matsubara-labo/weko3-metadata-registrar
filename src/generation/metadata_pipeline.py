@@ -226,11 +226,11 @@ def _build_metadata_runtime(config: MetadataGenerationConfig) -> _MetadataRuntim
     publish_date = settings.publish_date
     if config.publish_date:
         publish_date = validate_publish_date(config.publish_date, "--publish-date")
-    publish_status = validate_publish_status(
-        settings.publish_status
-        if config.publish_status is None
-        else config.publish_status
-    )
+    publish_status = settings.publish_status
+    if config.publish_status is not None:
+        publish_status = validate_publish_status(
+            config.publish_status, "--publish-status"
+        )
 
     base_metadata_bindings = [column.binding for column in WEKO_IMPORT_CONTROL_COLUMNS]
     base_display_columns = [
