@@ -8,7 +8,7 @@ import re
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum, auto
 from pathlib import Path
 from typing import Any
@@ -116,6 +116,17 @@ INVALID_ROWS_REPORT_NAME = "invalid_rows.tsv"
 # Leading report columns; a report fed back as input gets fresh values for them.
 INVALID_ROWS_REPORT_COLUMNS = ("_invalid_row", "_invalid_reason")
 MAX_LISTED_ROW_ERRORS = 50
+# ZIP member metadata is fixed (the date comes from the input file's mtime) so
+# identical TSV content and input mtime yield identical ZIP bytes (the import
+# ledger matches ZIPs by SHA-256). create_system 3 (Unix) makes external_attr
+# mean rw-r--r--. Members are stored uncompressed because deflate output
+# differs between zlib builds (e.g. zlib-ng on Windows), which would change the
+# hash across hosts. ZIP dates have 2-second resolution within this range.
+ZIP_MEMBER_COMPRESS_TYPE = zipfile.ZIP_STORED
+ZIP_MIN_DATE_TIME = (1980, 1, 1, 0, 0, 0)
+ZIP_MAX_DATE_TIME = (2107, 12, 31, 23, 59, 58)
+ZIP_MEMBER_CREATE_SYSTEM = 3
+ZIP_MEMBER_EXTERNAL_ATTR = 0o644 << 16
 
 # Optional input column giving a row's language for a field with a language child.
 LANGUAGE_COLUMN_SUFFIX = "_lang"
@@ -857,10 +868,32 @@ def write_invalid_rows_report(errors: list[RowError], output_path: Path) -> None
             )
 
 
-def zip_tsv(tsv_path: Path, zip_path: Path) -> None:
+ZipDateTime = tuple[int, int, int, int, int, int]
+
+
+def zip_date_time_from_timestamp(timestamp: int) -> ZipDateTime:
+    minimum = int(datetime(*ZIP_MIN_DATE_TIME, tzinfo=timezone.utc).timestamp())
+    maximum = int(datetime(*ZIP_MAX_DATE_TIME, tzinfo=timezone.utc).timestamp())
+    seconds = min(max(timestamp, minimum), maximum)
+    moment = datetime.fromtimestamp(seconds - seconds % 2, timezone.utc)
+    return (
+        moment.year,
+        moment.month,
+        moment.day,
+        moment.hour,
+        moment.minute,
+        moment.second,
+    )
+
+
+def zip_tsv(tsv_path: Path, zip_path: Path, date_time: ZipDateTime) -> None:
     zip_path.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.write(tsv_path, Path("data") / tsv_path.name)
+    with zipfile.ZipFile(zip_path, "w", ZIP_MEMBER_COMPRESS_TYPE) as archive:
+        info = zipfile.ZipInfo(f"data/{tsv_path.name}", date_time)
+        info.compress_type = ZIP_MEMBER_COMPRESS_TYPE
+        info.create_system = ZIP_MEMBER_CREATE_SYSTEM
+        info.external_attr = ZIP_MEMBER_EXTERNAL_ATTR
+        archive.writestr(info, tsv_path.read_bytes())
 
 
 def find_generated_artifacts(output_dir: Path) -> list[Path]:
@@ -931,6 +964,11 @@ def generate_metadata_artifacts(
         raise MetadataInputError(format_row_errors(config.input_path, errors))
     if not rows and not errors:
         return []
+    # Read before any output is written: the input may be an invalid_rows.tsv
+    # in the output directory that gets replaced below.
+    # Integer nanoseconds avoid float rounding pushing the time into the next slot.
+    input_mtime = config.input_path.stat().st_mtime_ns // 1_000_000_000
+    zip_date_time = zip_date_time_from_timestamp(input_mtime)
 
     removable = [
         path for path in existing if not _is_same_file(path, config.input_path)
@@ -966,7 +1004,7 @@ def generate_metadata_artifacts(
         artifact_tsv_path: Path | None = tsv_path
         if config.zip_outputs:
             zip_path = config.output_dir / f"import{suffix}.zip"
-            zip_tsv(tsv_path, zip_path)
+            zip_tsv(tsv_path, zip_path, zip_date_time)
             if not config.keep_tsv:
                 tsv_path.unlink()
                 artifact_tsv_path = None
