@@ -12,8 +12,10 @@ import argparse
 import http.client
 import json
 import os
+import re
 import shutil
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -50,13 +52,28 @@ BY_LOOKUP = {
 WEKO_FATAL_MESSAGE_KEYWORDS = (
     "internal server error",
     "the tsv file could not be read",
+    "import is in progress",
+    "celery is not running",
+    "サーバ内部エラー",
+    "インポートを実行中です",
 )
+WEKO_ERROR_ALERT_SELECTOR = "#errors .alert-danger"
+CHECK_COMPONENT_SELECTOR = "div.check-component"
+CHECK_SUMMARY_ROW_SELECTOR = "div.check-component .block-summary .flex-box"
+CHECK_RECORD_ROW_SELECTOR = "div.check-component table tbody tr"
+CHECK_RECORD_DOI_INPUT_SELECTOR = "input[name='list_doi']"
+CHECK_ERROR_SUMMARY_INDEX = 3
+MAX_REPORTED_CHECK_ERROR_ROWS = 20
 POLL_INTERVAL_SECONDS = 2
 ELEMENT_POLL_INTERVAL_SECONDS = 0.5
 RESULT_FILE_PREFIX = "List_Download_"
 PARTIAL_DOWNLOAD_SUFFIXES = (".crdownload", ".tmp", ".part")
 MAX_IMPORT_ATTEMPTS = 4
 DRIVER_RETRY_DELAY_SECONDS = 4
+
+
+class WekoPageError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -395,18 +412,117 @@ def collect_page_messages(driver: WebDriver) -> list[str]:
     return messages
 
 
+def normalize_text(text: str) -> str:
+    return " ".join(text.split())
+
+
+def reraise_if_driver_lost(exc: BaseException) -> None:
+    if driver_session_lost(exc) or driver_connection_lost(exc):
+        raise exc
+
+
+def collect_error_alert_messages(driver: WebDriver) -> list[str]:
+    try:
+        alerts = driver.find_elements(By.CSS_SELECTOR, WEKO_ERROR_ALERT_SELECTOR)
+    except Exception as exc:
+        reraise_if_driver_lost(exc)
+        return []
+    messages: list[str] = []
+    for alert in alerts:
+        try:
+            text = normalize_text(alert.text).lstrip("\u00d7").strip()
+        except Exception as exc:
+            reraise_if_driver_lost(exc)
+            continue
+        if text and text not in messages:
+            messages.append(text)
+    return messages
+
+
 def assert_no_weko_page_error(driver: WebDriver, zip_path: Path, phase: str) -> None:
-    messages = collect_page_messages(driver)
-    fatal_messages = [
-        message
-        for message in messages
-        if any(keyword in message.lower() for keyword in WEKO_FATAL_MESSAGE_KEYWORDS)
-    ]
+    fatal_messages = collect_error_alert_messages(driver)
+    for message in collect_page_messages(driver):
+        lowered = message.lower()
+        if not any(keyword in lowered for keyword in WEKO_FATAL_MESSAGE_KEYWORDS):
+            continue
+        if not any(
+            lowered in fatal.lower() or fatal.lower() in lowered
+            for fatal in fatal_messages
+        ):
+            fatal_messages.append(message)
     if fatal_messages:
-        raise TimeoutException(
+        raise WekoPageError(
             f"WEKO {phase} failed for {zip_path}: {' | '.join(fatal_messages)}; "
             f"{describe_driver_state(driver)}"
         )
+
+
+def read_check_error_count(driver: WebDriver) -> int | None:
+    try:
+        components = driver.find_elements(By.CSS_SELECTOR, CHECK_COMPONENT_SELECTOR)
+        if not any(component.is_displayed() for component in components):
+            return None
+        rows = driver.find_elements(By.CSS_SELECTOR, CHECK_SUMMARY_ROW_SELECTOR)
+        if len(rows) <= CHECK_ERROR_SUMMARY_INDEX:
+            return None
+        text = normalize_text(rows[CHECK_ERROR_SUMMARY_INDEX].text)
+    except Exception as exc:
+        reraise_if_driver_lost(exc)
+        return None
+    match = re.search(r"(\d+)$", text)
+    return int(match.group(1)) if match else None
+
+
+def collect_check_error_rows(driver: WebDriver) -> list[str]:
+    try:
+        rows = driver.find_elements(By.CSS_SELECTOR, CHECK_RECORD_ROW_SELECTOR)
+    except Exception as exc:
+        reraise_if_driver_lost(exc)
+        return []
+    error_rows: list[str] = []
+    for row in rows:
+        try:
+            inputs = row.find_elements(By.CSS_SELECTOR, CHECK_RECORD_DOI_INPUT_SELECTOR)
+            if not inputs or element_is_enabled(inputs[0]):
+                continue
+            cells = row.find_elements(By.TAG_NAME, "td")
+            if not cells:
+                continue
+            number = normalize_text(cells[0].text)
+            detail = normalize_text(cells[-1].text)
+        except Exception as exc:
+            reraise_if_driver_lost(exc)
+            continue
+        error_rows.append(f"row {number}: {detail}")
+    return error_rows
+
+
+def assert_no_check_errors(driver: WebDriver, zip_path: Path) -> None:
+    error_count = read_check_error_count(driver)
+    if not error_count:
+        return
+    error_rows = collect_check_error_rows(driver)
+    reported = error_rows[:MAX_REPORTED_CHECK_ERROR_ROWS]
+    if len(error_rows) > len(reported):
+        reported.append(f"... and {len(error_rows) - len(reported)} more")
+    details = "".join(f"\n  {row}" for row in reported)
+    raise WekoPageError(
+        f"WEKO check found {error_count} error record(s) in {zip_path}; "
+        f"{describe_driver_state(driver)}{details}"
+    )
+
+
+def find_ready_candidate(
+    driver: WebDriver, candidates: tuple[SelectorCandidate, ...]
+) -> WebElement | None:
+    for candidate in candidates:
+        try:
+            element = driver.find_element(*candidate.as_locator())
+            if element.is_displayed() and element_is_enabled(element):
+                return element
+        except Exception as exc:
+            reraise_if_driver_lost(exc)
+    return None
 
 
 def wait_for_step_ready_or_page_error(
@@ -415,18 +531,20 @@ def wait_for_step_ready_or_page_error(
     zip_path: Path,
     phase: str,
     timeout_ms: int,
-) -> None:
-    deadline = time.time() + timeout_ms / 1000
-    while time.time() < deadline:
+    extra_check: Callable[[], None] | None = None,
+) -> WebElement:
+    deadline = time.monotonic() + max(0, timeout_ms) / 1000
+    while True:
         assert_no_weko_page_error(driver, zip_path, phase)
-        for candidate in candidates:
-            try:
-                element = driver.find_element(*candidate.as_locator())
-            except Exception:
-                continue
-            if element.is_displayed() and element_is_enabled(element):
-                return
-        time.sleep(POLL_INTERVAL_SECONDS)
+        if extra_check is not None:
+            extra_check()
+        element = find_ready_candidate(driver, candidates)
+        if element is not None:
+            return element
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(ELEMENT_POLL_INTERVAL_SECONDS, remaining))
 
     messages = collect_page_messages(driver)
     message_suffix = f"; page_messages={messages}" if messages else ""
@@ -645,15 +763,20 @@ def import_one_zip(
         zip_path,
         "load",
         config.load_timeout_ms,
+        extra_check=lambda: assert_no_check_errors(driver, zip_path),
     )
     click_when_ready(
         driver, selectors.import_button, config.load_timeout_ms, "import button"
     )
-    assert_no_weko_page_error(driver, zip_path, "import")
-    previous_files = {path.name for path in download_dir.iterdir() if path.is_file()}
-    click_when_ready(
-        driver, selectors.download_button, config.import_timeout_ms, "download button"
+    download_button = wait_for_step_ready_or_page_error(
+        driver,
+        selectors.download_button,
+        zip_path,
+        "import",
+        config.import_timeout_ms,
     )
+    previous_files = {path.name for path in download_dir.iterdir() if path.is_file()}
+    click_element(driver, download_button)
     return wait_for_download(download_dir, previous_files, config.download_timeout_ms)
 
 
