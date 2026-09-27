@@ -12,9 +12,12 @@ import argparse
 import http.client
 import json
 import os
+import re
 import shutil
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -32,10 +35,23 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver, WebElement
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
 from urllib3.exceptions import ProtocolError
 
 from generation.registration_config import load_registration_settings
+from importers.import_ledger import (
+    STATUS_FAILED,
+    STATUS_STARTED,
+    STATUS_SUCCEEDED,
+    STATUS_UNKNOWN,
+    ImportLedger,
+    LedgerRecord,
+    file_sha256,
+)
+from importers.import_result import (
+    ImportResultError,
+    ImportResultSummary,
+    summarize_import_result,
+)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REGISTRATION_CONFIG_PATH = (
@@ -51,10 +67,32 @@ BY_LOOKUP = {
 WEKO_FATAL_MESSAGE_KEYWORDS = (
     "internal server error",
     "the tsv file could not be read",
+    "import is in progress",
+    "celery is not running",
+    "サーバ内部エラー",
+    "インポートを実行中です",
 )
+WEKO_ERROR_ALERT_SELECTOR = "#errors .alert-danger"
+CHECK_COMPONENT_SELECTOR = "div.check-component"
+CHECK_SUMMARY_ROW_SELECTOR = "div.check-component .block-summary .flex-box"
+CHECK_RECORD_ROW_SELECTOR = "div.check-component table tbody tr"
+CHECK_RECORD_DOI_INPUT_SELECTOR = "input[name='list_doi']"
+CHECK_ERROR_SUMMARY_INDEX = 3
+MAX_REPORTED_CHECK_ERROR_ROWS = 20
 POLL_INTERVAL_SECONDS = 2
+ELEMENT_POLL_INTERVAL_SECONDS = 0.5
+RESULT_FILE_PREFIX = "List_Download_"
+PARTIAL_DOWNLOAD_SUFFIXES = (".crdownload", ".tmp", ".part")
 MAX_IMPORT_ATTEMPTS = 4
 DRIVER_RETRY_DELAY_SECONDS = 4
+
+
+class WekoPageError(RuntimeError):
+    pass
+
+
+class ImportOutcomeUnknownError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -95,7 +133,11 @@ class WekoImportConfig:
     limit: int | None = None
     delete_zip_after_import: bool = False
     keep_zip_after_import: bool = False
+    ignore_certificate_errors: bool = False
     processed_zip_dir: Path | None = None
+    failed_zip_dir: Path | None = None
+    ledger_path: Path | None = None
+    allow_reimport: bool = False
     selector_config_path: Path | None = DEFAULT_SELECTOR_CONFIG_PATH
     selectors: WekoSelectors | None = None
 
@@ -120,6 +162,19 @@ class WekoImportConfig:
 
     def resolved_processed_zip_dir(self) -> Path:
         return self.processed_zip_dir or self.base_dir / "output" / "uploaded_zip_data"
+
+    def resolved_failed_zip_dir(self) -> Path:
+        return self.failed_zip_dir or self.base_dir / "output" / "failed_zip_data"
+
+    def resolved_ledger_path(self) -> Path:
+        return self.ledger_path or self.base_dir / "output" / "import_ledger.jsonl"
+
+
+@dataclass(frozen=True)
+class ImportRunResults:
+    imported: list[tuple[Path, Path]]
+    skipped: list[tuple[Path, LedgerRecord]]
+    limited_to_zero: bool = False
 
 
 def load_selector_config(selector_config_path: Path) -> WekoSelectors:
@@ -159,31 +214,54 @@ def sorted_zip_files(zip_dir: Path) -> list[Path]:
     return sorted(path for path in zip_dir.glob("*.zip") if path.is_file())
 
 
+def poll_candidates(
+    driver: WebDriver,
+    candidates: tuple[SelectorCandidate, ...],
+    timeout_ms: int,
+    condition_factory,
+    failure_message: str,
+) -> WebElement:
+    deadline = time.monotonic() + max(0, timeout_ms) / 1000
+    conditions = [condition_factory(candidate.as_locator()) for candidate in candidates]
+    last_error: Exception | None = None
+
+    while True:
+        for condition in conditions:
+            try:
+                result = condition(driver)
+            except Exception as exc:
+                if driver_session_lost(exc) or driver_connection_lost(exc):
+                    raise
+                last_error = exc
+                continue
+            if result:
+                return result
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(ELEMENT_POLL_INTERVAL_SECONDS, remaining))
+
+    candidate_descriptions = [
+        f"{candidate.by}={candidate.value}" for candidate in candidates
+    ]
+    raise TimeoutException(
+        f"{failure_message}: {candidate_descriptions}"
+    ) from last_error
+
+
 def wait_for_candidates(
     driver: WebDriver,
     candidates: tuple[SelectorCandidate, ...],
     timeout_ms: int,
     condition_factory,
 ) -> WebElement:
-    last_error: Exception | None = None
-    attempts = max(1, len(candidates))
-    timeout_per_selector = max(1.0, timeout_ms / 1000 / attempts)
-
-    for candidate in candidates:
-        locator = candidate.as_locator()
-        try:
-            return WebDriverWait(driver, timeout_per_selector).until(
-                condition_factory(locator)
-            )
-        except Exception as exc:
-            last_error = exc
-
-    candidate_descriptions = [
-        f"{candidate.by}={candidate.value}" for candidate in candidates
-    ]
-    raise TimeoutException(
-        f"Could not resolve any selector from: {candidate_descriptions}"
-    ) from last_error
+    return poll_candidates(
+        driver,
+        candidates,
+        timeout_ms,
+        condition_factory,
+        "Could not resolve any selector from",
+    )
 
 
 def any_candidate_present(
@@ -225,28 +303,21 @@ def wait_for_clickable(
 def wait_for_enabled(
     driver: WebDriver, candidates: tuple[SelectorCandidate, ...], timeout_ms: int
 ) -> WebElement:
-    last_error: Exception | None = None
-    attempts = max(1, len(candidates))
-    timeout_per_selector = max(1.0, timeout_ms / 1000 / attempts)
+    return poll_candidates(
+        driver,
+        candidates,
+        timeout_ms,
+        enabled_element_located,
+        "Could not resolve any enabled selector from",
+    )
 
-    for candidate in candidates:
-        locator = candidate.as_locator()
-        try:
 
-            def enabled_element(d: WebDriver) -> WebElement | bool:
-                element = d.find_element(*locator)
-                return element if element_is_enabled(element) else False
+def enabled_element_located(locator: tuple[str, str]):
+    def condition(driver: WebDriver) -> WebElement | bool:
+        element = driver.find_element(*locator)
+        return element if element_is_enabled(element) else False
 
-            return WebDriverWait(driver, timeout_per_selector).until(enabled_element)
-        except Exception as exc:
-            last_error = exc
-
-    candidate_descriptions = [
-        f"{candidate.by}={candidate.value}" for candidate in candidates
-    ]
-    raise TimeoutException(
-        f"Could not resolve any enabled selector from: {candidate_descriptions}"
-    ) from last_error
+    return condition
 
 
 def element_is_enabled(element: WebElement) -> bool:
@@ -283,7 +354,7 @@ def click_when_ready(
         pass
 
     try:
-        element = wait_for_enabled(driver, candidates, timeout_ms)
+        element = wait_for_enabled(driver, candidates, 0)
         click_element(driver, element)
         return
     except Exception as exc:
@@ -321,22 +392,32 @@ def prepare_file_input(driver: WebDriver, file_input: WebElement) -> WebElement:
 
 
 def wait_for_download(
-    download_dir: Path, previous_files: set[str], timeout_ms: int
+    download_dir: Path,
+    previous_files: set[str],
+    timeout_ms: int,
+    expected_prefix: str = RESULT_FILE_PREFIX,
 ) -> Path:
     deadline = time.time() + timeout_ms / 1000
+    ignored: set[str] = set()
     while time.time() < deadline:
         current_files = {path.name for path in download_dir.iterdir() if path.is_file()}
         new_files = sorted(current_files - previous_files)
         completed = [
-            name
-            for name in new_files
-            if not name.endswith((".crdownload", ".tmp", ".part"))
+            name for name in new_files if not name.endswith(PARTIAL_DOWNLOAD_SUFFIXES)
         ]
-        if completed:
-            return download_dir / completed[0]
+        for name in completed:
+            if name.startswith(expected_prefix):
+                return download_dir / name
+            if name not in ignored:
+                ignored.add(name)
+                print(
+                    f"Ignoring unexpected download {name!r} "
+                    f"(expected prefix {expected_prefix!r})"
+                )
         time.sleep(POLL_INTERVAL_SECONDS)
     raise TimeoutException(
-        f"Timed out waiting for a completed download in {download_dir}"
+        f"Timed out waiting for a completed download starting with "
+        f"{expected_prefix!r} in {download_dir}"
     )
 
 
@@ -367,18 +448,117 @@ def collect_page_messages(driver: WebDriver) -> list[str]:
     return messages
 
 
+def normalize_text(text: str) -> str:
+    return " ".join(text.split())
+
+
+def reraise_if_driver_lost(exc: BaseException) -> None:
+    if driver_session_lost(exc) or driver_connection_lost(exc):
+        raise exc
+
+
+def collect_error_alert_messages(driver: WebDriver) -> list[str]:
+    try:
+        alerts = driver.find_elements(By.CSS_SELECTOR, WEKO_ERROR_ALERT_SELECTOR)
+    except Exception as exc:
+        reraise_if_driver_lost(exc)
+        return []
+    messages: list[str] = []
+    for alert in alerts:
+        try:
+            text = normalize_text(alert.text).lstrip("\u00d7").strip()
+        except Exception as exc:
+            reraise_if_driver_lost(exc)
+            continue
+        if text and text not in messages:
+            messages.append(text)
+    return messages
+
+
 def assert_no_weko_page_error(driver: WebDriver, zip_path: Path, phase: str) -> None:
-    messages = collect_page_messages(driver)
-    fatal_messages = [
-        message
-        for message in messages
-        if any(keyword in message.lower() for keyword in WEKO_FATAL_MESSAGE_KEYWORDS)
-    ]
+    fatal_messages = collect_error_alert_messages(driver)
+    for message in collect_page_messages(driver):
+        lowered = message.lower()
+        if not any(keyword in lowered for keyword in WEKO_FATAL_MESSAGE_KEYWORDS):
+            continue
+        if not any(
+            lowered in fatal.lower() or fatal.lower() in lowered
+            for fatal in fatal_messages
+        ):
+            fatal_messages.append(message)
     if fatal_messages:
-        raise TimeoutException(
+        raise WekoPageError(
             f"WEKO {phase} failed for {zip_path}: {' | '.join(fatal_messages)}; "
             f"{describe_driver_state(driver)}"
         )
+
+
+def read_check_error_count(driver: WebDriver) -> int | None:
+    try:
+        components = driver.find_elements(By.CSS_SELECTOR, CHECK_COMPONENT_SELECTOR)
+        if not any(component.is_displayed() for component in components):
+            return None
+        rows = driver.find_elements(By.CSS_SELECTOR, CHECK_SUMMARY_ROW_SELECTOR)
+        if len(rows) <= CHECK_ERROR_SUMMARY_INDEX:
+            return None
+        text = normalize_text(rows[CHECK_ERROR_SUMMARY_INDEX].text)
+    except Exception as exc:
+        reraise_if_driver_lost(exc)
+        return None
+    match = re.search(r"(\d+)$", text)
+    return int(match.group(1)) if match else None
+
+
+def collect_check_error_rows(driver: WebDriver) -> list[str]:
+    try:
+        rows = driver.find_elements(By.CSS_SELECTOR, CHECK_RECORD_ROW_SELECTOR)
+    except Exception as exc:
+        reraise_if_driver_lost(exc)
+        return []
+    error_rows: list[str] = []
+    for row in rows:
+        try:
+            inputs = row.find_elements(By.CSS_SELECTOR, CHECK_RECORD_DOI_INPUT_SELECTOR)
+            if not inputs or element_is_enabled(inputs[0]):
+                continue
+            cells = row.find_elements(By.TAG_NAME, "td")
+            if not cells:
+                continue
+            number = normalize_text(cells[0].text)
+            detail = normalize_text(cells[-1].text)
+        except Exception as exc:
+            reraise_if_driver_lost(exc)
+            continue
+        error_rows.append(f"row {number}: {detail}")
+    return error_rows
+
+
+def assert_no_check_errors(driver: WebDriver, zip_path: Path) -> None:
+    error_count = read_check_error_count(driver)
+    if not error_count:
+        return
+    error_rows = collect_check_error_rows(driver)
+    reported = error_rows[:MAX_REPORTED_CHECK_ERROR_ROWS]
+    if len(error_rows) > len(reported):
+        reported.append(f"... and {len(error_rows) - len(reported)} more")
+    details = "".join(f"\n  {row}" for row in reported)
+    raise WekoPageError(
+        f"WEKO check found {error_count} error record(s) in {zip_path}; "
+        f"{describe_driver_state(driver)}{details}"
+    )
+
+
+def find_ready_candidate(
+    driver: WebDriver, candidates: tuple[SelectorCandidate, ...]
+) -> WebElement | None:
+    for candidate in candidates:
+        try:
+            element = driver.find_element(*candidate.as_locator())
+            if element.is_displayed() and element_is_enabled(element):
+                return element
+        except Exception as exc:
+            reraise_if_driver_lost(exc)
+    return None
 
 
 def wait_for_step_ready_or_page_error(
@@ -387,18 +567,20 @@ def wait_for_step_ready_or_page_error(
     zip_path: Path,
     phase: str,
     timeout_ms: int,
-) -> None:
-    deadline = time.time() + timeout_ms / 1000
-    while time.time() < deadline:
+    extra_check: Callable[[], None] | None = None,
+) -> WebElement:
+    deadline = time.monotonic() + max(0, timeout_ms) / 1000
+    while True:
         assert_no_weko_page_error(driver, zip_path, phase)
-        for candidate in candidates:
-            try:
-                element = driver.find_element(*candidate.as_locator())
-            except Exception:
-                continue
-            if element.is_displayed() and element_is_enabled(element):
-                return
-        time.sleep(POLL_INTERVAL_SECONDS)
+        if extra_check is not None:
+            extra_check()
+        element = find_ready_candidate(driver, candidates)
+        if element is not None:
+            return element
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(ELEMENT_POLL_INTERVAL_SECONDS, remaining))
 
     messages = collect_page_messages(driver)
     message_suffix = f"; page_messages={messages}" if messages else ""
@@ -439,6 +621,23 @@ def finalize_imported_zip(zip_path: Path, config: WekoImportConfig) -> Path | No
 
     shutil.move(str(zip_path), str(destination))
     return destination
+
+
+def move_failed_zip(zip_path: Path, config: WekoImportConfig) -> Path:
+    failed_dir = config.resolved_failed_zip_dir()
+    failed_dir.mkdir(parents=True, exist_ok=True)
+    destination = unique_destination_path(failed_dir, zip_path.name)
+    shutil.move(str(zip_path), str(destination))
+    return destination
+
+
+def verify_import_result(
+    zip_path: Path, downloaded_file: Path
+) -> tuple[ImportResultSummary | None, str | None]:
+    try:
+        return summarize_import_result(downloaded_file, zip_path), None
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
 
 
 def describe_driver_state(driver: WebDriver) -> str:
@@ -506,10 +705,13 @@ def driver_connection_lost(exc: BaseException) -> bool:
     return False
 
 
-def build_chrome_options(download_dir: Path, headless: bool) -> Options:
+def build_chrome_options(
+    download_dir: Path, headless: bool, ignore_certificate_errors: bool = False
+) -> Options:
     options = Options()
-    options.add_argument("--ignore-certificate-errors")
-    options.add_argument("--allow-insecure-localhost")
+    if ignore_certificate_errors:
+        options.add_argument("--ignore-certificate-errors")
+        options.add_argument("--allow-insecure-localhost")
     if headless:
         options.add_argument("--headless=new")
     prefs = {
@@ -524,7 +726,9 @@ def build_chrome_options(download_dir: Path, headless: bool) -> Options:
 
 def create_driver(config: WekoImportConfig, download_dir: Path) -> WebDriver:
     driver = webdriver.Chrome(
-        options=build_chrome_options(download_dir, config.headless)
+        options=build_chrome_options(
+            download_dir, config.headless, config.ignore_certificate_errors
+        )
     )
     if not config.headless:
         driver.maximize_window()
@@ -599,7 +803,11 @@ def login(driver: WebDriver, config: WekoImportConfig) -> None:
 
 
 def import_one_zip(
-    driver: WebDriver, zip_path: Path, download_dir: Path, config: WekoImportConfig
+    driver: WebDriver,
+    zip_path: Path,
+    download_dir: Path,
+    config: WekoImportConfig,
+    before_import_click: Callable[[], object] | None = None,
 ) -> Path:
     selectors = config.selectors or resolve_selectors(config)
     driver.get(config.import_url)
@@ -617,19 +825,41 @@ def import_one_zip(
         zip_path,
         "load",
         config.load_timeout_ms,
+        extra_check=lambda: assert_no_check_errors(driver, zip_path),
     )
-    click_when_ready(
-        driver, selectors.import_button, config.load_timeout_ms, "import button"
-    )
-    assert_no_weko_page_error(driver, zip_path, "import")
-    previous_files = {path.name for path in download_dir.iterdir() if path.is_file()}
-    click_when_ready(
-        driver, selectors.download_button, config.import_timeout_ms, "download button"
-    )
-    return wait_for_download(download_dir, previous_files, config.download_timeout_ms)
+    if before_import_click is not None:
+        before_import_click()
+    try:
+        click_when_ready(
+            driver, selectors.import_button, config.load_timeout_ms, "import button"
+        )
+        download_button = wait_for_step_ready_or_page_error(
+            driver,
+            selectors.download_button,
+            zip_path,
+            "import",
+            config.import_timeout_ms,
+        )
+        previous_files = {
+            path.name for path in download_dir.iterdir() if path.is_file()
+        }
+        click_element(driver, download_button)
+        return wait_for_download(
+            download_dir, previous_files, config.download_timeout_ms
+        )
+    except Exception as exc:
+        raise ImportOutcomeUnknownError(
+            f"WEKO import outcome for {zip_path} is unknown because an error "
+            f"occurred after the Import button click was attempted: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
 
 
-def run_import(config: WekoImportConfig) -> list[tuple[Path, Path]]:
+def run_import(config: WekoImportConfig) -> ImportRunResults:
+    if config.delete_zip_after_import and config.keep_zip_after_import:
+        raise ValueError(
+            "delete_zip_after_import and keep_zip_after_import cannot both be enabled"
+        )
     config = replace(config, weko_base_url=resolve_weko_base_url(config))
     config = replace(config, selectors=resolve_selectors(config))
     zip_dir = config.resolved_zip_dir()
@@ -640,30 +870,63 @@ def run_import(config: WekoImportConfig) -> list[tuple[Path, Path]]:
     download_dir.mkdir(parents=True, exist_ok=True)
 
     zip_files = sorted_zip_files(zip_dir)
+    if config.limit == 0 and zip_files:
+        return ImportRunResults(imported=[], skipped=[], limited_to_zero=True)
     if config.limit is not None:
         zip_files = zip_files[: config.limit]
+    results = ImportRunResults(imported=[], skipped=[])
     if not zip_files:
-        return []
+        return results
 
-    results: list[tuple[Path, Path]] = []
+    ledger = ImportLedger(config.resolved_ledger_path())
     total = len(zip_files)
     for index, zip_path in enumerate(zip_files, start=1):
+        sha256 = file_sha256(zip_path)
+        previous = ledger.blocking_record(sha256)
+        if previous is not None and not config.allow_reimport:
+            print(
+                f"[{index}/{total}] skipping {zip_path}: identical content "
+                f"(sha256={sha256}) is already in the import ledger "
+                f"{ledger.path} as {previous.status!r} at {previous.timestamp} "
+                f"(zip_name={previous.zip_name!r}); use --allow-reimport to "
+                f"import it again"
+            )
+            results.skipped.append((zip_path, previous))
+            continue
         print(f"[{index}/{total}] importing {zip_path}")
         last_error: Exception | None = None
+        downloaded_file: Path | None = None
+        record_started = partial(ledger.append, zip_path.name, sha256, STATUS_STARTED)
         for attempt in range(1, MAX_IMPORT_ATTEMPTS + 1):
             driver: WebDriver | None = None
             try:
                 driver = create_driver(config, download_dir)
                 login(driver, config)
-                downloaded_file = import_one_zip(driver, zip_path, download_dir, config)
-                results.append((zip_path, downloaded_file))
-                finalized_zip_path = finalize_imported_zip(zip_path, config)
-                print(f"[{index}/{total}] imported={zip_path} result={downloaded_file}")
-                if finalized_zip_path is None:
-                    print(f"[{index}/{total}] deleted={zip_path}")
-                elif finalized_zip_path != zip_path:
-                    print(f"[{index}/{total}] moved={zip_path} -> {finalized_zip_path}")
+                downloaded_file = import_one_zip(
+                    driver,
+                    zip_path,
+                    download_dir,
+                    config,
+                    before_import_click=record_started,
+                )
                 break
+            except ImportOutcomeUnknownError as exc:
+                ledger.append(zip_path.name, sha256, STATUS_UNKNOWN, detail=str(exc))
+                failed_zip_path = move_failed_zip(zip_path, config)
+                print(
+                    f"[{index}/{total}] import outcome is UNKNOWN for {zip_path}: "
+                    f"an error occurred after the Import button click was "
+                    f"attempted, so it will not be retried"
+                )
+                print(
+                    f"[{index}/{total}] check manually in WEKO whether the items "
+                    f"were registered before importing this zip again"
+                )
+                print(f"[{index}/{total}] moved={zip_path} -> {failed_zip_path}")
+                raise ImportOutcomeUnknownError(
+                    f"{exc}; zip moved to {failed_zip_path}; "
+                    f"check WEKO manually before re-importing"
+                ) from exc
             except Exception as exc:
                 last_error = exc
                 if attempt == MAX_IMPORT_ATTEMPTS or not (
@@ -683,8 +946,66 @@ def run_import(config: WekoImportConfig) -> list[tuple[Path, Path]]:
         else:
             if last_error is not None:
                 raise last_error
+        if downloaded_file is None:
+            raise RuntimeError(f"Import did not produce a result file for {zip_path}")
 
+        summary, parse_error = verify_import_result(zip_path, downloaded_file)
+        if summary is None or not summary.succeeded:
+            detail = parse_error or (summary.describe()[0] if summary else None)
+            ledger.append(
+                zip_path.name,
+                sha256,
+                STATUS_FAILED,
+                result_path=downloaded_file,
+                detail=detail,
+            )
+            failed_zip_path = move_failed_zip(zip_path, config)
+            print(
+                f"[{index}/{total}] import result check failed for {zip_path} "
+                f"result={downloaded_file}"
+            )
+            if parse_error is not None:
+                print(f"[{index}/{total}] result: unparsable ({parse_error})")
+            if summary is not None:
+                for line in summary.describe():
+                    print(f"[{index}/{total}] result: {line}")
+            print(f"[{index}/{total}] moved={zip_path} -> {failed_zip_path}")
+            raise ImportResultError(
+                f"WEKO import result for {zip_path} was not fully successful; "
+                f"zip moved to {failed_zip_path}; result={downloaded_file}"
+            )
+
+        ledger.append(
+            zip_path.name, sha256, STATUS_SUCCEEDED, result_path=downloaded_file
+        )
+        results.imported.append((zip_path, downloaded_file))
+        finalized_zip_path = finalize_imported_zip(zip_path, config)
+        print(f"[{index}/{total}] imported={zip_path} result={downloaded_file}")
+        print(
+            f"[{index}/{total}] result: "
+            f"success={summary.success_count}/{len(summary.rows)}"
+        )
+        if finalized_zip_path is None:
+            print(f"[{index}/{total}] deleted={zip_path}")
+        elif finalized_zip_path != zip_path:
+            print(f"[{index}/{total}] moved={zip_path} -> {finalized_zip_path}")
+
+    if results.skipped:
+        print(
+            f"Skipped {len(results.skipped)} zip file(s) already recorded in the "
+            f"import ledger {ledger.path}"
+        )
     return results
+
+
+def non_negative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid int value: {value!r}") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(f"must be a non-negative integer: {value}")
+    return parsed
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -713,10 +1034,36 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--import-timeout-ms", type=int, default=480_000)
     parser.add_argument("--download-timeout-ms", type=int, default=120_000)
     parser.add_argument("--post-login-timeout-ms", type=int, default=45_000)
-    parser.add_argument("--limit", type=int)
-    parser.add_argument("--delete-zip-after-import", action="store_true")
-    parser.add_argument("--keep-zip-after-import", action="store_true")
+    parser.add_argument(
+        "--ignore-certificate-errors",
+        action="store_true",
+        help="Ignore TLS certificate errors (e.g. self-signed WEKO). "
+        "Do not use against a server with a valid certificate.",
+    )
+    parser.add_argument("--limit", type=non_negative_int)
+    zip_handling = parser.add_mutually_exclusive_group()
+    zip_handling.add_argument("--delete-zip-after-import", action="store_true")
+    zip_handling.add_argument("--keep-zip-after-import", action="store_true")
     parser.add_argument("--processed-zip-dir", type=Path)
+    parser.add_argument(
+        "--failed-zip-dir",
+        type=Path,
+        help=(
+            "Destination for zip files whose import failed or whose outcome "
+            "must be checked manually."
+        ),
+    )
+    parser.add_argument(
+        "--ledger-path",
+        type=Path,
+        help="Append-only import ledger (JSON Lines). "
+        "Default: <base-dir>/output/import_ledger.jsonl.",
+    )
+    parser.add_argument(
+        "--allow-reimport",
+        action="store_true",
+        help="Import zip files even if identical content is already in the ledger.",
+    )
     return parser
 
 
@@ -730,6 +1077,7 @@ def main() -> int:
         zip_dir=args.zip_dir,
         download_dir=args.download_dir,
         headless=args.headless,
+        ignore_certificate_errors=args.ignore_certificate_errors,
         ui_timeout_ms=args.ui_timeout_ms,
         load_timeout_ms=args.load_timeout_ms,
         import_timeout_ms=args.import_timeout_ms,
@@ -739,14 +1087,25 @@ def main() -> int:
         delete_zip_after_import=args.delete_zip_after_import,
         keep_zip_after_import=args.keep_zip_after_import,
         processed_zip_dir=args.processed_zip_dir,
+        failed_zip_dir=args.failed_zip_dir,
+        ledger_path=args.ledger_path,
+        allow_reimport=args.allow_reimport,
     )
 
     results = run_import(config)
-    if not results:
-        print("No zip files were found to import.")
+    if not results.imported:
+        if results.limited_to_zero:
+            print("No zip files were imported because --limit 0 was given.")
+        elif results.skipped:
+            print(
+                f"No zip files were imported; {len(results.skipped)} zip file(s) "
+                "were skipped because they are already in the import ledger."
+            )
+        else:
+            print("No zip files were found to import.")
         return 0
 
-    for zip_path, download_path in results:
+    for zip_path, download_path in results.imported:
         print(f"imported={zip_path} result={download_path}")
     return 0
 

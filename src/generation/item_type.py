@@ -42,7 +42,11 @@ class ItemTypeField:
 
     @property
     def dynamically_repeatable(self) -> bool:
-        return self.shape == "array" and len(self.values) == 1
+        # An array item holds one value and, optionally, its language.
+        return (
+            self.shape == "array"
+            and sum(not value.language for value in self.values) == 1
+        )
 
     @property
     def binding_templates(self) -> tuple[str, ...]:
@@ -83,6 +87,8 @@ class ItemTypeDefinition:
     name: str
     fields: tuple[ItemTypeField, ...]
     fixed_fields: tuple[ItemTypeField, ...] = ()
+    # Keys of fields mapped to JPCOAR title with a language attribute.
+    title_field_keys: frozenset[str] = frozenset()
 
     @property
     def display_name(self) -> str:
@@ -107,6 +113,40 @@ def _read_json_member(archive: zipfile.ZipFile, member_name: str) -> dict[str, A
     if not isinstance(raw, dict):
         raise ItemTypeExportError(f"{member_name} must contain a JSON object")
     return raw
+
+
+def _read_optional_json_member(
+    archive: zipfile.ZipFile, member_name: str
+) -> dict[str, Any] | None:
+    if not any(Path(name).name == member_name for name in archive.namelist()):
+        return None
+    return _read_json_member(archive, member_name)
+
+
+def _has_language_attribute(mapping: Any) -> bool:
+    return (
+        isinstance(mapping, dict)
+        and isinstance(mapping.get("@attributes"), dict)
+        and "xml:lang" in mapping["@attributes"]
+    )
+
+
+def _title_field_keys(item_type_mapping: dict[str, Any] | None) -> frozenset[str]:
+    # Mirrors weko-search-ui handle_item_title, which reads jpcoar_mapping only.
+    if item_type_mapping is None:
+        return frozenset()
+    mapping = item_type_mapping.get("mapping")
+    if not isinstance(mapping, dict):
+        raise ItemTypeExportError("ItemTypeMapping.json mapping must be an object")
+
+    keys: set[str] = set()
+    for key, definition in mapping.items():
+        if not isinstance(definition, dict):
+            continue
+        jpcoar = definition.get("jpcoar_mapping")
+        if isinstance(jpcoar, dict) and _has_language_attribute(jpcoar.get("title")):
+            keys.add(key)
+    return frozenset(keys)
 
 
 def _object_values(properties: Any, field_name: str) -> tuple[ItemTypeValue, ...]:
@@ -187,6 +227,9 @@ def load_item_type_export(export_path: Path) -> ItemTypeDefinition:
         with zipfile.ZipFile(export_path) as archive:
             item_type = _read_json_member(archive, "ItemType.json")
             item_type_name = _read_json_member(archive, "ItemTypeName.json")
+            item_type_mapping = _read_optional_json_member(
+                archive, "ItemTypeMapping.json"
+            )
     except zipfile.BadZipFile as exc:
         raise ItemTypeExportError(
             f"ItemType export is not a valid ZIP file: {export_path}"
@@ -265,4 +308,5 @@ def load_item_type_export(export_path: Path) -> ItemTypeDefinition:
         name=name,
         fields=tuple(fields),
         fixed_fields=tuple(fixed_fields),
+        title_field_keys=_title_field_keys(item_type_mapping),
     )

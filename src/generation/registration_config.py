@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+PUBLISH_STATUSES = ("public", "private")
+DEFAULT_PUBLISH_STATUS = "public"
 
 
 class RegistrationConfigError(ValueError):
@@ -18,6 +22,7 @@ class RegistrationSettings:
     default_index: str
     publish_date: str
     default_languages: dict[str, str]
+    publish_status: str = DEFAULT_PUBLISH_STATUS
 
     def resolve_index(self, index_name: str | None = None) -> tuple[str, str]:
         selected_name = index_name or self.default_index
@@ -36,6 +41,22 @@ def _required_string(raw: dict[str, Any], key: str) -> str:
     return value
 
 
+def is_publish_date(value: str) -> bool:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d") == value
+    except ValueError:
+        return False
+
+
+def validate_publish_date(value: str, source: str = "publish_date") -> str:
+    if not is_publish_date(value):
+        raise RegistrationConfigError(
+            f"{source} {value!r} is not a valid date; WEKO requires PubDate "
+            "as YYYY-MM-DD, e.g. 2025-05-27"
+        )
+    return value
+
+
 def _string_mapping(raw: dict[str, Any], key: str) -> dict[str, str]:
     value = raw.get(key)
     if not isinstance(value, dict):
@@ -48,6 +69,14 @@ def _string_mapping(raw: dict[str, Any], key: str) -> dict[str, str]:
             raise RegistrationConfigError(f"{key} must contain non-empty values")
         mapping[name] = mapped_value
     return mapping
+
+
+def validate_publish_status(value: object) -> str:
+    if value not in PUBLISH_STATUSES:
+        raise RegistrationConfigError(
+            f"publish_status must be one of {', '.join(PUBLISH_STATUSES)}: {value!r}"
+        )
+    return value
 
 
 def load_registration_settings(config_path: Path) -> RegistrationSettings:
@@ -89,6 +118,9 @@ def load_registration_settings(config_path: Path) -> RegistrationSettings:
         item_type_export_path=export_path,
         indexes=indexes,
         default_index=default_index,
-        publish_date=_required_string(raw, "publish_date"),
+        publish_date=validate_publish_date(_required_string(raw, "publish_date")),
         default_languages=_string_mapping(raw, "default_languages"),
+        publish_status=validate_publish_status(
+            raw.get("publish_status", DEFAULT_PUBLISH_STATUS)
+        ),
     )

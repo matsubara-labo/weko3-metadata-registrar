@@ -70,7 +70,11 @@
   "load_button": [
     {
       "by": "xpath",
-      "value": "//button[contains(normalize-space(.), 'Load')]"
+      "value": "//div[contains(concat(' ', normalize-space(@class), ' '), ' import_component ')]//button[contains(concat(' ', normalize-space(@class), ' '), ' btn-primary ')][span[contains(concat(' ', normalize-space(@class), ' '), ' glyphicon-download-alt ')]]"
+    },
+    {
+      "by": "xpath",
+      "value": "//div[contains(concat(' ', normalize-space(@class), ' '), ' import_component ')]//button[contains(normalize-space(.), 'Load') or contains(normalize-space(.), 'Next') or contains(normalize-space(.), '次へ')]"
     },
     {
       "by": "xpath",
@@ -80,7 +84,11 @@
   "import_button": [
     {
       "by": "xpath",
-      "value": "//button[contains(normalize-space(.), 'Import')]"
+      "value": "//div[contains(concat(' ', normalize-space(@class), ' '), ' check-component ')]//button[contains(concat(' ', normalize-space(@class), ' '), ' btn-primary ')][span[contains(concat(' ', normalize-space(@class), ' '), ' glyphicon-download-alt ')]]"
+    },
+    {
+      "by": "xpath",
+      "value": "//div[contains(concat(' ', normalize-space(@class), ' '), ' check-component ')]//button[contains(normalize-space(.), 'Import') or contains(normalize-space(.), 'インポート')]"
     },
     {
       "by": "xpath",
@@ -89,8 +97,12 @@
   ],
   "download_button": [
     {
+      "by": "css selector",
+      "value": ".result_container button.btn-primary"
+    },
+    {
       "by": "xpath",
-      "value": "//button[contains(normalize-space(.), 'Download')]"
+      "value": "//div[contains(concat(' ', normalize-space(@class), ' '), ' result_container ')]//button"
     },
     {
       "by": "xpath",
