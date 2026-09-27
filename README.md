@@ -206,13 +206,15 @@ uv run python src/scripts/selenium_auto_register.py --headless
 | `--zip-dir PATH` | `output/zip_data` | 登録対象ZIPのディレクトリ |
 | `--download-dir PATH` | `output/import_results` | WEKOから取得するインポート結果の保存先 |
 | `--processed-zip-dir PATH` | `output/uploaded_zip_data` | 登録済みZIPの移動先 |
-| `--failed-zip-dir PATH` | `output/failed_zip_data` | インポート結果に失敗が含まれるZIPの移動先 |
+| `--failed-zip-dir PATH` | `output/failed_zip_data` | 失敗・要確認ZIP（インポート結果に失敗が含まれるZIP、またはImport後に結果を確認できなかったZIP）の移動先 |
+| `--ledger-path PATH` | `output/import_ledger.jsonl` | インポート台帳（JSON Lines、追記のみ）のパス |
+| `--allow-reimport` | 無効 | 台帳に記録済みのZIPもスキップせずに登録する |
 | `--headless` | 無効 | Chromeを画面に表示せず実行する |
 | `--limit N` | 制限なし | ファイル名順の先頭N件だけ登録する |
 | `--keep-zip-after-import` | 無効 | 全件登録に成功したZIPを元の場所に残す |
 | `--delete-zip-after-import` | 無効 | 全件登録に成功したZIPを削除する |
 
-`--zip-dir`、`--download-dir`、`--processed-zip-dir`、`--failed-zip-dir` の既定値は、`--base-dir` を基準に解決されます。明示的に指定したパスは、実行時のカレントディレクトリを基準に解決されます。
+`--zip-dir`、`--download-dir`、`--processed-zip-dir`、`--failed-zip-dir`、`--ledger-path` の既定値は、`--base-dir` を基準に解決されます。明示的に指定したパスは、実行時のカレントディレクトリを基準に解決されます。
 
 ### タイムアウト引数
 
@@ -226,9 +228,30 @@ uv run python src/scripts/selenium_auto_register.py --headless
 | `--import-timeout-ms` | `480000` | インポート完了の待機 |
 | `--download-timeout-ms` | `120000` | 結果ファイルのダウンロード完了待機 |
 
-WebDriverの切断と判定された場合に限り、1ファイルにつき最大4回試行します。その他のエラーでは処理を中断し、未処理のZIPはそのまま残ります。
+Importボタンのクリックを試みる前にWebDriverの切断と判定された場合に限り、ログインからやり直して1ファイルにつき最大4回試行します。その他のエラーでは処理を中断し、未処理のZIPはそのまま残ります。
 
-WEKO画面にエラー表示（インポート実行中、Celery停止、サーバ内部エラーなど）が出た場合や、Checkタブでチェックエラーが1件以上ある場合は、タイムアウトを待たずに即座に処理を中断します。チェックエラーの場合は、エラーのある行番号と内容をエラーメッセージに出力します。いずれの場合も対象ZIPは元の場所に残ります。
+WEKO画面にエラー表示（インポート実行中、Celery停止、サーバ内部エラーなど）が出た場合や、Checkタブでチェックエラーが1件以上ある場合は、タイムアウトを待たずに即座に処理を中断します。チェックエラーの場合は、エラーのある行番号と内容をエラーメッセージに出力します。Importボタンのクリック前にこれらが発生した場合、対象ZIPは元の場所に残ります。
+
+### Import後のエラー（要手動確認）
+
+Importボタンのクリックを試みた後は、クリックがWEKOに届いたかどうかを判別できないため、自動再試行を行いません。クリック以降（インポート完了待機、結果のダウンロードとその待機・タイムアウトを含む）に発生したエラーは、WebDriverの切断であっても `ImportOutcomeUnknownError` として扱います。このとき対象ZIPを失敗・要確認ZIPとして `output/failed_zip_data`（`--failed-zip-dir` で変更可能）へ移動し、登録結果が不明であることを表示して処理を中断します。重複登録を避けるため、WEKO上で該当アイテムが登録されたかどうかを手動で確認してから、必要な場合だけ再投入してください。
+
+### インポート台帳と再実行時のスキップ
+
+同一データの重複登録を防ぐため、各ZIPの投入状況を追記専用のインポート台帳 `output/import_ledger.jsonl`（`--ledger-path` で変更可能）に記録します。台帳はJSON Lines形式で、1行が1件の記録です。各行は書き込むたびにディスクへ同期します。
+
+| キー | 内容 |
+|---|---|
+| `timestamp` | 記録日時（ローカル時刻、UTCオフセット付きISO 8601） |
+| `zip_name` | ZIPのファイル名 |
+| `sha256` | ZIPファイル内容のSHA-256 |
+| `status` | `started`（Importボタンのクリック直前）、`succeeded`（結果検証に成功）、`failed`（結果検証に失敗）、`unknown`（Import後のエラーで結果不明） |
+| `result_path` | 結果ファイルのパス（ある場合のみ） |
+| `detail` | エラー内容などの補足（ある場合のみ） |
+
+各ZIPの登録前にSHA-256を計算し、同じ内容の記録が台帳にあれば、ファイル名が変わっていてもそのZIPを登録せずにスキップします（ステータスは問いません）。スキップ時は、前回のステータスと記録日時を表示し、ZIPは移動しません。`started` だけが残っている記録は、前回の実行が途中で中断された（Ctrl+Cなど）ことを示し、登録済みの可能性があるため同様にスキップします。WEKO上の状況を確認したうえで再登録する場合は、`--allow-reimport` を指定してください。`--limit N` はスキップ対象を含むファイル名順の先頭N件に適用され、終了時にスキップした件数を表示します。台帳の空行や解析できない行は警告を表示して読み飛ばします。
+
+WEKO上の既存アイテムを識別子（`corpusid` など）で検索して重複を確認する機能は実装していません。台帳は、このツールで投入したZIPの内容だけを照合します。
 
 ### 登録後のファイル
 
@@ -250,7 +273,7 @@ WEKO画面にエラー表示（インポート実行中、Celery停止、サー�
 
 失敗行がある場合、件数が一致しない場合、または結果ファイルを解析できない場合は、上記のオプションにかかわらずZIPを削除せず、元のディレクトリにも残さずに `output/failed_zip_data`（`--failed-zip-dir` で変更可能）へ移動します。同名のファイルがある場合は連番を付けて移動します。このとき成功件数・失敗件数・期待件数と、失敗行（最大20行）の No.、Item ID、ステータス、インポート結果を表示し、`ImportResultError` で処理を中断します。この場合は再試行しません。一部のレコードがすでに登録されている可能性があるため、WEKO上の登録状況と結果ファイルを確認してから、必要なレコードだけを再投入してください。
 
-コンソールに `imported=<zip-path> result=<download-path>` が表示され、結果ファイルが保存されていることを確認してください。登録対象がない場合は `No zip files were found to import.` と表示して終了します。
+コンソールに `imported=<zip-path> result=<download-path>` が表示され、結果ファイルが保存されていることを確認してください。登録対象がない場合は `No zip files were found to import.` と表示して終了します。登録対象のZIPがすべて台帳によりスキップされた場合は、`No zip files were imported; <件数> zip file(s) were skipped because they are already in the import ledger.` と表示して終了します。
 
 ## 生成物の仕様
 

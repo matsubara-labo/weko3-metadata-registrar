@@ -18,6 +18,7 @@ from importers.import_result import (
 )
 from importers.selenium_auto_register import (
     MAX_IMPORT_ATTEMPTS,
+    ImportRunResults,
     WekoImportConfig,
     build_parser,
     driver_connection_lost,
@@ -169,7 +170,8 @@ class RunImportResultTests(unittest.TestCase):
             zip_path, outcome, output = self.run_with_result(
                 base_dir, [en_row(1), en_row(2)]
             )
-            self.assertIsInstance(outcome, list)
+            self.assertIsInstance(outcome, ImportRunResults)
+            self.assertEqual(len(outcome.imported), 1)
             self.assertFalse(zip_path.exists())
             self.assertTrue(
                 (base_dir / "output" / "uploaded_zip_data" / "import.zip").exists()

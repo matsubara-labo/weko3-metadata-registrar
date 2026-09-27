@@ -17,6 +17,7 @@ import shutil
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -37,6 +38,15 @@ from selenium.webdriver.support import expected_conditions as EC
 from urllib3.exceptions import ProtocolError
 
 from generation.registration_config import load_registration_settings
+from importers.import_ledger import (
+    STATUS_FAILED,
+    STATUS_STARTED,
+    STATUS_SUCCEEDED,
+    STATUS_UNKNOWN,
+    ImportLedger,
+    LedgerRecord,
+    file_sha256,
+)
 from importers.import_result import (
     ImportResultError,
     ImportResultSummary,
@@ -81,6 +91,10 @@ class WekoPageError(RuntimeError):
     pass
 
 
+class ImportOutcomeUnknownError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class SelectorCandidate:
     by: str
@@ -121,6 +135,8 @@ class WekoImportConfig:
     keep_zip_after_import: bool = False
     processed_zip_dir: Path | None = None
     failed_zip_dir: Path | None = None
+    ledger_path: Path | None = None
+    allow_reimport: bool = False
     selector_config_path: Path | None = DEFAULT_SELECTOR_CONFIG_PATH
     selectors: WekoSelectors | None = None
 
@@ -148,6 +164,15 @@ class WekoImportConfig:
 
     def resolved_failed_zip_dir(self) -> Path:
         return self.failed_zip_dir or self.base_dir / "output" / "failed_zip_data"
+
+    def resolved_ledger_path(self) -> Path:
+        return self.ledger_path or self.base_dir / "output" / "import_ledger.jsonl"
+
+
+@dataclass(frozen=True)
+class ImportRunResults:
+    imported: list[tuple[Path, Path]]
+    skipped: list[tuple[Path, LedgerRecord]]
 
 
 def load_selector_config(selector_config_path: Path) -> WekoSelectors:
@@ -771,7 +796,11 @@ def login(driver: WebDriver, config: WekoImportConfig) -> None:
 
 
 def import_one_zip(
-    driver: WebDriver, zip_path: Path, download_dir: Path, config: WekoImportConfig
+    driver: WebDriver,
+    zip_path: Path,
+    download_dir: Path,
+    config: WekoImportConfig,
+    before_import_click: Callable[[], object] | None = None,
 ) -> Path:
     selectors = config.selectors or resolve_selectors(config)
     driver.get(config.import_url)
@@ -791,22 +820,35 @@ def import_one_zip(
         config.load_timeout_ms,
         extra_check=lambda: assert_no_check_errors(driver, zip_path),
     )
-    click_when_ready(
-        driver, selectors.import_button, config.load_timeout_ms, "import button"
-    )
-    download_button = wait_for_step_ready_or_page_error(
-        driver,
-        selectors.download_button,
-        zip_path,
-        "import",
-        config.import_timeout_ms,
-    )
-    previous_files = {path.name for path in download_dir.iterdir() if path.is_file()}
-    click_element(driver, download_button)
-    return wait_for_download(download_dir, previous_files, config.download_timeout_ms)
+    if before_import_click is not None:
+        before_import_click()
+    try:
+        click_when_ready(
+            driver, selectors.import_button, config.load_timeout_ms, "import button"
+        )
+        download_button = wait_for_step_ready_or_page_error(
+            driver,
+            selectors.download_button,
+            zip_path,
+            "import",
+            config.import_timeout_ms,
+        )
+        previous_files = {
+            path.name for path in download_dir.iterdir() if path.is_file()
+        }
+        click_element(driver, download_button)
+        return wait_for_download(
+            download_dir, previous_files, config.download_timeout_ms
+        )
+    except Exception as exc:
+        raise ImportOutcomeUnknownError(
+            f"WEKO import outcome for {zip_path} is unknown because an error "
+            f"occurred after the Import button click was attempted: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
 
 
-def run_import(config: WekoImportConfig) -> list[tuple[Path, Path]]:
+def run_import(config: WekoImportConfig) -> ImportRunResults:
     config = replace(config, weko_base_url=resolve_weko_base_url(config))
     config = replace(config, selectors=resolve_selectors(config))
     zip_dir = config.resolved_zip_dir()
@@ -819,22 +861,59 @@ def run_import(config: WekoImportConfig) -> list[tuple[Path, Path]]:
     zip_files = sorted_zip_files(zip_dir)
     if config.limit is not None:
         zip_files = zip_files[: config.limit]
+    results = ImportRunResults(imported=[], skipped=[])
     if not zip_files:
-        return []
+        return results
 
-    results: list[tuple[Path, Path]] = []
+    ledger = ImportLedger(config.resolved_ledger_path())
     total = len(zip_files)
     for index, zip_path in enumerate(zip_files, start=1):
+        sha256 = file_sha256(zip_path)
+        previous = ledger.blocking_record(sha256)
+        if previous is not None and not config.allow_reimport:
+            print(
+                f"[{index}/{total}] skipping {zip_path}: identical content "
+                f"(sha256={sha256}) is already in the import ledger "
+                f"{ledger.path} as {previous.status!r} at {previous.timestamp} "
+                f"(zip_name={previous.zip_name!r}); use --allow-reimport to "
+                f"import it again"
+            )
+            results.skipped.append((zip_path, previous))
+            continue
         print(f"[{index}/{total}] importing {zip_path}")
         last_error: Exception | None = None
         downloaded_file: Path | None = None
+        record_started = partial(ledger.append, zip_path.name, sha256, STATUS_STARTED)
         for attempt in range(1, MAX_IMPORT_ATTEMPTS + 1):
             driver: WebDriver | None = None
             try:
                 driver = create_driver(config, download_dir)
                 login(driver, config)
-                downloaded_file = import_one_zip(driver, zip_path, download_dir, config)
+                downloaded_file = import_one_zip(
+                    driver,
+                    zip_path,
+                    download_dir,
+                    config,
+                    before_import_click=record_started,
+                )
                 break
+            except ImportOutcomeUnknownError as exc:
+                ledger.append(zip_path.name, sha256, STATUS_UNKNOWN, detail=str(exc))
+                failed_zip_path = move_failed_zip(zip_path, config)
+                print(
+                    f"[{index}/{total}] import outcome is UNKNOWN for {zip_path}: "
+                    f"an error occurred after the Import button click was "
+                    f"attempted, so it will not be retried"
+                )
+                print(
+                    f"[{index}/{total}] check manually in WEKO whether the items "
+                    f"were registered before importing this zip again"
+                )
+                print(f"[{index}/{total}] moved={zip_path} -> {failed_zip_path}")
+                raise ImportOutcomeUnknownError(
+                    f"{exc}; zip moved to {failed_zip_path}; "
+                    f"check WEKO manually before re-importing"
+                ) from exc
             except Exception as exc:
                 last_error = exc
                 if attempt == MAX_IMPORT_ATTEMPTS or not (
@@ -859,6 +938,14 @@ def run_import(config: WekoImportConfig) -> list[tuple[Path, Path]]:
 
         summary, parse_error = verify_import_result(zip_path, downloaded_file)
         if summary is None or not summary.succeeded:
+            detail = parse_error or (summary.describe()[0] if summary else None)
+            ledger.append(
+                zip_path.name,
+                sha256,
+                STATUS_FAILED,
+                result_path=downloaded_file,
+                detail=detail,
+            )
             failed_zip_path = move_failed_zip(zip_path, config)
             print(
                 f"[{index}/{total}] import result check failed for {zip_path} "
@@ -875,7 +962,10 @@ def run_import(config: WekoImportConfig) -> list[tuple[Path, Path]]:
                 f"zip moved to {failed_zip_path}; result={downloaded_file}"
             )
 
-        results.append((zip_path, downloaded_file))
+        ledger.append(
+            zip_path.name, sha256, STATUS_SUCCEEDED, result_path=downloaded_file
+        )
+        results.imported.append((zip_path, downloaded_file))
         finalized_zip_path = finalize_imported_zip(zip_path, config)
         print(f"[{index}/{total}] imported={zip_path} result={downloaded_file}")
         print(
@@ -887,6 +977,11 @@ def run_import(config: WekoImportConfig) -> list[tuple[Path, Path]]:
         elif finalized_zip_path != zip_path:
             print(f"[{index}/{total}] moved={zip_path} -> {finalized_zip_path}")
 
+    if results.skipped:
+        print(
+            f"Skipped {len(results.skipped)} zip file(s) already recorded in the "
+            f"import ledger {ledger.path}"
+        )
     return results
 
 
@@ -923,7 +1018,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--failed-zip-dir",
         type=Path,
-        help="Destination for zip files whose import result was not fully successful.",
+        help=(
+            "Destination for zip files whose import failed or whose outcome "
+            "must be checked manually."
+        ),
+    )
+    parser.add_argument(
+        "--ledger-path",
+        type=Path,
+        help="Append-only import ledger (JSON Lines). "
+        "Default: <base-dir>/output/import_ledger.jsonl.",
+    )
+    parser.add_argument(
+        "--allow-reimport",
+        action="store_true",
+        help="Import zip files even if identical content is already in the ledger.",
     )
     return parser
 
@@ -948,14 +1057,22 @@ def main() -> int:
         keep_zip_after_import=args.keep_zip_after_import,
         processed_zip_dir=args.processed_zip_dir,
         failed_zip_dir=args.failed_zip_dir,
+        ledger_path=args.ledger_path,
+        allow_reimport=args.allow_reimport,
     )
 
     results = run_import(config)
-    if not results:
-        print("No zip files were found to import.")
+    if not results.imported:
+        if results.skipped:
+            print(
+                f"No zip files were imported; {len(results.skipped)} zip file(s) "
+                "were skipped because they are already in the import ledger."
+            )
+        else:
+            print("No zip files were found to import.")
         return 0
 
-    for zip_path, download_path in results:
+    for zip_path, download_path in results.imported:
         print(f"imported={zip_path} result={download_path}")
     return 0
 
