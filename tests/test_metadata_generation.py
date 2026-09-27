@@ -45,10 +45,28 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
         self.assertIsInstance(schema.default_languages, dict)
         self.assertIsInstance(schema.field_attributes, dict)
         self.assertIsInstance(schema.display_columns, dict)
-        self.assertIsInstance(schema.column_bindings["Title"], list)
-        self.assertIsInstance(schema.column_bindings["Creator"], str)
-        self.assertIsInstance(schema.display_columns["Title"], list)
-        self.assertIsInstance(schema.display_columns["Creator"], str)
+        self.assertEqual(
+            schema.column_bindings["Title"],
+            [
+                ".metadata.item_30001_title0[{index}].subitem_title",
+                ".metadata.item_30001_title0[{index}].subitem_title_language",
+            ],
+        )
+        self.assertEqual(
+            schema.display_columns["Title"],
+            ["Title[{index}].タイトル", "Title[{index}].言語"],
+        )
+        self.assertIn("Title", schema.repeatable_fields)
+        self.assertIn("Creator", schema.repeatable_fields)
+        self.assertNotIn("Title_g", schema.repeatable_fields)
+        self.assertEqual(
+            schema.column_bindings["Title_g"],
+            [
+                ".metadata.item_30001_alternative_title1.subitem_alternative_title",
+                ".metadata.item_30001_alternative_title1"
+                ".subitem_alternative_title_language",
+            ],
+        )
         self.assertTrue(
             all(isinstance(value, str) for value in schema.base_metadata_bindings)
         )
@@ -80,11 +98,12 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
             template_column_values={},
             template_column_attributes={},
             column_bindings={
-                "RequiredField": ".metadata.item_required[{index}].interim"
+                "RequiredField": [".metadata.item_required[{index}].interim"]
             },
             default_languages={},
             field_attributes={"RequiredField": "Required, Allow Multiple"},
-            display_columns={"RequiredField": "RequiredField[{index}].None"},
+            display_columns={"RequiredField": ["RequiredField[{index}].None"]},
+            repeatable_fields=frozenset({"RequiredField"}),
         )
 
         with self.assertRaisesRegex(MetadataInputError, "RequiredField.*empty"):
@@ -93,18 +112,19 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
     def _schema(
         self, field_name: str, attribute: str, *, repeatable: bool
     ) -> MetadataSchema:
-        binding = ".metadata.item_x[{index}].interim" if repeatable else [".x"]
-        display = f"{field_name}[{{index}}].None" if repeatable else [field_name]
+        binding = ".metadata.item_x[{index}].interim" if repeatable else ".x"
+        display = f"{field_name}[{{index}}].None" if repeatable else field_name
         return MetadataSchema(
             item_type_name="Test(1)",
             item_schema_url="https://weko.example.org/items/jsonschema/1",
             base_metadata_bindings=[],
             template_column_values={},
             template_column_attributes={},
-            column_bindings={field_name: binding},
+            column_bindings={field_name: [binding]},
             default_languages={},
             field_attributes={field_name: attribute},
-            display_columns={field_name: display},
+            display_columns={field_name: [display]},
+            repeatable_fields=frozenset({field_name} if repeatable else ()),
         )
 
     def test_empty_list_elements_do_not_satisfy_required_field(self) -> None:
@@ -124,12 +144,16 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
 
         self.assertEqual(row["Field"], ["a", "b"])
 
-    def test_scalar_field_uses_first_non_empty_element(self) -> None:
+    def test_scalar_field_uses_single_non_empty_element(self) -> None:
         schema = self._schema("Field", "Required", repeatable=False)
 
         self.assertEqual(
-            normalize_row({"Field": "['', ' ', 'x', 'y']"}, schema), {"Field": "x"}
+            normalize_row({"Field": "['', ' ', 'x']"}, schema), {"Field": "x"}
         )
+        with self.assertRaisesRegex(
+            MetadataInputError, r"^'Field' accepts a single value but got 2$"
+        ):
+            normalize_row({"Field": "['', 'x', 'y']"}, schema)
         self.assertEqual(
             normalize_row({"Field": "  plain  "}, schema), {"Field": "plain"}
         )
@@ -170,10 +194,11 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
             base_metadata_bindings=[],
             template_column_values={},
             template_column_attributes={},
-            column_bindings={"Version": ".metadata.item_version[{index}].interim"},
+            column_bindings={"Version": [".metadata.item_version[{index}].interim"]},
             default_languages={},
             field_attributes={"Version": "Allow Multiple"},
-            display_columns={"Version": "Version[{index}].None"},
+            display_columns={"Version": ["Version[{index}].None"]},
+            repeatable_fields=frozenset({"Version"}),
         )
 
         with self.assertRaisesRegex(MetadataInputError, "'Version'.*float"):
@@ -186,10 +211,11 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
             base_metadata_bindings=[],
             template_column_values={},
             template_column_attributes={},
-            column_bindings={"Title": ".metadata.item_title[{index}].interim"},
+            column_bindings={"Title": [".metadata.item_title[{index}].interim"]},
             default_languages={},
             field_attributes={"Title": "Allow Multiple"},
-            display_columns={"Title": "Title[{index}].None"},
+            display_columns={"Title": ["Title[{index}].None"]},
+            repeatable_fields=frozenset({"Title"}),
         )
 
     def _load_text(

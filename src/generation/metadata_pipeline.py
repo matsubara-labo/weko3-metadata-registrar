@@ -136,10 +136,12 @@ class MetadataSchema:
     base_metadata_bindings: list[str]
     template_column_values: dict[str, str]
     template_column_attributes: dict[str, str]
-    column_bindings: dict[str, list[str] | str]
+    # Templates of repeatable fields contain "{index}" and expand per value.
+    column_bindings: dict[str, list[str]]
     default_languages: dict[str, str]
     field_attributes: dict[str, str]
-    display_columns: dict[str, list[str] | str]
+    display_columns: dict[str, list[str]]
+    repeatable_fields: frozenset[str]
     # Non-hidden fields mapped to JPCOAR title; WEKO ignores hidden ones.
     title_fields: frozenset[str] = frozenset()
     hidden_title_fields: frozenset[str] = frozenset()
@@ -149,8 +151,7 @@ class MetadataSchema:
         return [
             field_name
             for field_name, binding in self.column_bindings.items()
-            if not isinstance(binding, str)
-            and any(column.endswith("_language") for column in binding)
+            if any(column.endswith("_language") for column in binding)
         ]
 
 
@@ -220,15 +221,12 @@ def _build_metadata_runtime(config: MetadataGenerationConfig) -> _MetadataRuntim
         )
         template_column_attributes[field.name] = field.attribute
 
-    column_bindings: dict[str, list[str] | str] = {}
-    display_columns: dict[str, list[str] | str] = {}
-    for field in item_type.fields:
-        if field.dynamically_repeatable:
-            column_bindings[field.name] = field.binding_templates[0]
-            display_columns[field.name] = field.display_templates[0]
-        else:
-            column_bindings[field.name] = list(field.binding_templates)
-            display_columns[field.name] = list(field.display_templates)
+    column_bindings = {
+        field.name: list(field.binding_templates) for field in item_type.fields
+    }
+    display_columns = {
+        field.name: list(field.display_templates) for field in item_type.fields
+    }
 
     field_names = {field.name for field in item_type.fields}
     for field in item_type.fields:
@@ -249,6 +247,9 @@ def _build_metadata_runtime(config: MetadataGenerationConfig) -> _MetadataRuntim
         default_languages=dict(settings.default_languages),
         field_attributes={field.name: field.attribute for field in item_type.fields},
         display_columns=display_columns,
+        repeatable_fields=frozenset(
+            field.name for field in item_type.fields if field.dynamically_repeatable
+        ),
         title_fields=frozenset(
             field.name
             for field in item_type.fields
@@ -382,13 +383,52 @@ def parse_literal_list(raw_value: Any) -> list[str]:
     return values
 
 
+def _resolve_languages(
+    source_row: dict[str, Any],
+    field_name: str,
+    value_count: int,
+    schema: MetadataSchema,
+) -> list[str]:
+    if not value_count:
+        return []
+    column = language_column(field_name)
+    try:
+        languages = parse_literal_list(source_row.get(column, ""))
+    except MetadataInputError as exc:
+        raise MetadataInputError(f"{column!r}: {exc}") from exc
+    languages = [language.strip() for language in languages if language.strip()]
+    if not languages:
+        languages = [schema.default_languages.get(field_name, "")]
+    if len(languages) == 1:
+        return languages * value_count
+    if len(languages) != value_count:
+        raise MetadataInputError(
+            f"{column!r} has {len(languages)} languages but {field_name!r} has "
+            f"{value_count} value(s); give one language per value or a single "
+            "language for all"
+        )
+    return languages
+
+
+def _has_value_with_language(
+    normalized: dict[str, str | list[str]], field_name: str
+) -> bool:
+    values = normalized[field_name]
+    languages = normalized.get(language_column(field_name)) or []
+    if isinstance(values, str):
+        values = [values]
+    if isinstance(languages, str):
+        languages = [languages]
+    return any(value and language for value, language in zip(values, languages))
+
+
 def normalize_row(
     source_row: dict[str, Any],
     schema: MetadataSchema,
     date_like_fields: frozenset[str] = frozenset(),
 ) -> dict[str, str | list[str]]:
     normalized: dict[str, str | list[str]] = {}
-    for field_name, binding in schema.column_bindings.items():
+    for field_name in schema.column_bindings:
         try:
             values = parse_literal_list(source_row.get(field_name, ""))
         except MetadataInputError as exc:
@@ -396,31 +436,30 @@ def normalize_row(
         values = [value for value in values if value.strip()]
         if "Required" in schema.field_attributes[field_name] and not values:
             raise MetadataInputError(f"Required metadata field {field_name!r} is empty")
-        if isinstance(binding, str):
-            if field_name in date_like_fields:
-                values = [normalize_date(field_name, value) for value in values]
+        repeatable = field_name in schema.repeatable_fields
+        if not repeatable and len(values) > 1:
+            raise MetadataInputError(
+                f"{field_name!r} accepts a single value but got {len(values)}"
+            )
+        if field_name in date_like_fields:
+            values = [normalize_date(field_name, value) for value in values]
+        if repeatable:
             normalized[field_name] = values
-            continue
-
-        value = values[0] if values else ""
-        if field_name in date_like_fields and value:
-            value = normalize_date(field_name, value)
-        normalized[field_name] = value
+        else:
+            normalized[field_name] = values[0] if values else ""
 
     for field_name in schema.language_fields:
+        value = normalized[field_name]
+        values = value if isinstance(value, list) else [value] if value else []
+        languages = _resolve_languages(source_row, field_name, len(values), schema)
         column = language_column(field_name)
-        language = ""
-        if normalized[field_name]:
-            try:
-                languages = parse_literal_list(source_row.get(column, ""))
-            except MetadataInputError as exc:
-                raise MetadataInputError(f"{column!r}: {exc}") from exc
-            language = next((entry for entry in languages if entry.strip()), "")
-            language = language.strip() or schema.default_languages.get(field_name, "")
-        normalized[column] = language
+        if isinstance(value, list):
+            normalized[column] = languages
+        else:
+            normalized[column] = languages[0] if languages else ""
 
     if schema.title_fields and not any(
-        normalized[field_name] and normalized.get(language_column(field_name))
+        _has_value_with_language(normalized, field_name)
         for field_name in schema.title_fields
     ):
         names = ", ".join(repr(name) for name in sorted(schema.title_fields))
@@ -661,8 +700,8 @@ def compute_max_lengths(
 ) -> dict[str, int]:
     return {
         field_name: max((len(row[field_name]) for row in rows), default=0)
-        for field_name, binding in schema.column_bindings.items()
-        if isinstance(binding, str)
+        for field_name in schema.column_bindings
+        if field_name in schema.repeatable_fields
     }
 
 
@@ -674,25 +713,24 @@ def build_dynamic_columns(
     display_columns = list(schema.template_column_values)
     attribute_row = list(schema.template_column_attributes.values())
 
-    for field_name, binding in schema.column_bindings.items():
-        display = schema.display_columns[field_name]
+    for field_name, bindings in schema.column_bindings.items():
+        displays = schema.display_columns[field_name]
+        if len(displays) != len(bindings):
+            raise ValueError(
+                f"Field {field_name!r} has {len(bindings)} bindings but "
+                f"{len(displays)} display columns"
+            )
         field_attribute = schema.field_attributes[field_name]
-        if isinstance(binding, str):
-            if not isinstance(display, str):
-                raise TypeError(
-                    f"Display template for repeatable field {field_name!r} must be a string"
-                )
+        if field_name in schema.repeatable_fields:
             for index in range(max_lengths[field_name]):
-                metadata_bindings.append(binding.format(index=index))
-                display_columns.append(display.format(index=index))
-                attribute_row.append(field_attribute)
+                metadata_bindings.extend(item.format(index=index) for item in bindings)
+                display_columns.extend(item.format(index=index) for item in displays)
+                attribute_row.extend([field_attribute] * len(bindings))
             continue
 
-        if not isinstance(display, list):
-            raise TypeError(f"Display columns for field {field_name!r} must be a list")
-        metadata_bindings.extend(binding)
-        display_columns.extend(display)
-        attribute_row.extend([field_attribute] * len(binding))
+        metadata_bindings.extend(bindings)
+        display_columns.extend(displays)
+        attribute_row.extend([field_attribute] * len(bindings))
 
     return metadata_bindings, display_columns, attribute_row
 
@@ -704,14 +742,16 @@ def build_value_row(
 ) -> list[str]:
     values = list(schema.template_column_values.values())
 
-    for field_name, binding in schema.column_bindings.items():
+    for field_name, bindings in schema.column_bindings.items():
         field_value = row[field_name]
-        if isinstance(binding, str):
-            entries = field_value
-            values.extend(
-                entries[index] if index < len(entries) else ""
-                for index in range(max_lengths[field_name])
-            )
+        if field_name in schema.repeatable_fields:
+            languages = row.get(language_column(field_name)) or []
+            for index in range(max_lengths[field_name]):
+                for binding in bindings:
+                    entries = (
+                        languages if binding.endswith("_language") else field_value
+                    )
+                    values.append(entries[index] if index < len(entries) else "")
             continue
 
         language = ""
@@ -720,8 +760,8 @@ def build_value_row(
                 language_column(field_name),
                 schema.default_languages.get(field_name, ""),
             )
-        for column_binding in binding:
-            if column_binding.endswith("_language"):
+        for binding in bindings:
+            if binding.endswith("_language"):
                 values.append(language)
             else:
                 values.append(str(field_value))

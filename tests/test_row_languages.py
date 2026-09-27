@@ -26,6 +26,10 @@ def _object_field(name: str, value_key: str) -> dict:
     }
 
 
+def _array_field(name: str, value_key: str) -> dict:
+    return {"type": "array", "title": name, "items": _object_field(name, value_key)}
+
+
 def _write_export(
     export_path: Path,
     properties: dict[str, dict],
@@ -103,8 +107,6 @@ class _LanguageTestCase(unittest.TestCase):
             writer.writerow(fieldnames)
             writer.writerows(rows)
 
-
-class RowLanguageTests(_LanguageTestCase):
     def _generate(
         self,
         default_languages: dict[str, str],
@@ -120,6 +122,8 @@ class RowLanguageTests(_LanguageTestCase):
         on_warning = warnings.append if warnings is not None else None
         return generate_metadata_artifacts(config, on_warning=on_warning)
 
+
+class RowLanguageTests(_LanguageTestCase):
     def _language_cells(self, artifact) -> list[tuple[str, str]]:
         with artifact.tsv_path.open("r", encoding="utf-8-sig", newline="") as file_obj:
             rows = list(csv.reader(file_obj, delimiter="\t"))
@@ -149,10 +153,10 @@ class RowLanguageTests(_LanguageTestCase):
             [("ja", "ja"), ("en", "en"), ("en", "")],
         )
 
-    def test_list_form_language_cell_uses_first_non_empty_element(self) -> None:
+    def test_list_form_language_cell_drops_empty_elements(self) -> None:
         self._write_source(
             ["Title", "Title_lang"],
-            [["['日本語']", "['', 'ja', 'en']"], ["English", "[' en ']"]],
+            [["['日本語']", "['', 'ja', ' ']"], ["English", "[' en ']"]],
         )
 
         artifacts = self._generate({"Title": "fr"})
@@ -253,6 +257,136 @@ class RowLanguageTests(_LanguageTestCase):
         self.assertEqual(schema.language_fields, ["Title", "Title_g"])
 
 
+class MultipleValueTests(_LanguageTestCase):
+    def _rows(self, artifact) -> list[list[str]]:
+        with artifact.tsv_path.open("r", encoding="utf-8-sig", newline="") as file_obj:
+            rows = list(csv.reader(file_obj, delimiter="\t"))
+        for row in rows[1:]:
+            self.assertEqual(len(row), len(rows[1]))
+        return rows
+
+    def _cells(self, artifact, prefix: str) -> list[dict[str, str]]:
+        rows = self._rows(artifact)
+        return [
+            {
+                name: value
+                for name, value in zip(rows[2], row)
+                if name.startswith(prefix)
+            }
+            for row in rows[5:]
+        ]
+
+    def test_multiple_titles_expand_with_default_language(self) -> None:
+        self._write_source(["Title"], [["['T1', 'T2']"], ["Only"]])
+
+        artifacts = self._generate({"Title": "en"})
+
+        rows = self._rows(artifacts[0])
+        self.assertIn(".metadata.item_30001_title0[1].subitem_title", rows[1])
+        self.assertIn(".metadata.item_30001_title0[1].subitem_title_language", rows[1])
+        self.assertEqual(
+            self._cells(artifacts[0], "Title["),
+            [
+                {
+                    "Title[0].タイトル": "T1",
+                    "Title[0].言語": "en",
+                    "Title[1].タイトル": "T2",
+                    "Title[1].言語": "en",
+                },
+                {
+                    "Title[0].タイトル": "Only",
+                    "Title[0].言語": "en",
+                    "Title[1].タイトル": "",
+                    "Title[1].言語": "",
+                },
+            ],
+        )
+
+    def test_row_language_list_is_aligned_with_values(self) -> None:
+        self._write_source(
+            ["Title", "Title_lang"],
+            [["['日本語', 'English']", "['ja', ' en ']"]],
+        )
+
+        artifacts = self._generate({"Title": "fr"})
+
+        self.assertEqual(
+            self._cells(artifacts[0], "Title["),
+            [
+                {
+                    "Title[0].タイトル": "日本語",
+                    "Title[0].言語": "ja",
+                    "Title[1].タイトル": "English",
+                    "Title[1].言語": "en",
+                }
+            ],
+        )
+
+    def test_single_row_language_applies_to_every_value(self) -> None:
+        self._write_source(
+            ["Title", "Title_lang"],
+            [["['T1', 'T2']", "ja"], ["['T3', 'T4']", "['ja']"]],
+        )
+
+        artifacts = self._generate({"Title": "en"})
+
+        self.assertEqual(
+            [
+                (cells["Title[0].言語"], cells["Title[1].言語"])
+                for cells in self._cells(artifacts[0], "Title[")
+            ],
+            [("ja", "ja"), ("ja", "ja")],
+        )
+
+    def test_language_count_mismatch_is_row_error(self) -> None:
+        self._write_source(
+            ["Title", "Title_lang"],
+            [["['T1', 'T2', 'T3']", "['ja', 'en']"], ["Ok", ""]],
+        )
+
+        with self.assertRaisesRegex(
+            MetadataInputError,
+            r"source\.csv:2: 'Title_lang' has 2 languages but 'Title' has 3 "
+            r"value\(s\)",
+        ):
+            self._generate({"Title": "en"})
+
+        artifacts = self._generate({"Title": "en"}, skip_invalid_rows=True)
+        self.assertEqual(artifacts[0].row_count, 1)
+
+    def test_single_value_field_rejects_several_values(self) -> None:
+        self._write_source(["Title", "Title_g"], [["T", "['A1', 'A2']"]])
+
+        with self.assertRaisesRegex(
+            MetadataInputError,
+            r"source\.csv:2: 'Title_g' accepts a single value but got 2$",
+        ):
+            self._generate({"Title": "en", "Title_g": "en"})
+
+    def test_field_without_language_expands_values_only(self) -> None:
+        self._write_source(["Title", "Creator"], [["T", "['Alice', 'Bob']"]])
+
+        artifacts = self._generate({"Title": "en"})
+
+        self.assertEqual(
+            self._cells(artifacts[0], "Creator"),
+            [{"Creator[0].None": "Alice", "Creator[1].None": "Bob"}],
+        )
+
+    def test_title_without_language_on_any_value_is_row_error(self) -> None:
+        self._write_source(
+            ["Title", "Title_lang"], [["['T1', 'T2']", ""], ["['T3', 'T4']", "ja"]]
+        )
+
+        with self.assertRaisesRegex(
+            MetadataInputError, r"source\.csv:2: no title field \('Title'\) has both"
+        ):
+            self._generate({})
+
+        artifacts = self._generate({}, skip_invalid_rows=True)
+        self.assertEqual(artifacts[0].row_count, 1)
+
+
 class MultipleTitleFieldTests(_LanguageTestCase):
     def _generate_multi(
         self,
@@ -296,6 +430,33 @@ class MultipleTitleFieldTests(_LanguageTestCase):
         self.assertTrue(
             any("field 'TitleA' has no language" in warning for warning in warnings)
         )
+
+    def test_repeatable_title_index_with_language_is_enough(self) -> None:
+        export_path = self.root / "array.zip"
+        _write_export(
+            export_path,
+            {
+                "item_a": _array_field("TitleA", "subitem_title"),
+                "item_b": _object_field("TitleB", "subitem_title"),
+            },
+            title_keys=("item_a", "item_b"),
+        )
+        self._write_source(
+            ["TitleA", "TitleA_lang", "TitleB"],
+            [["['A1', 'A2']", "['ja', 'en']", ""], ["['A3', 'A4']", "", "B"]],
+        )
+        config = MetadataGenerationConfig(
+            input_path=self.source_path,
+            output_dir=self.output_dir,
+            registration_config_path=self._settings({}, export_path),
+            skip_invalid_rows=True,
+        )
+
+        artifacts = generate_metadata_artifacts(config)
+
+        self.assertEqual(artifacts[0].row_count, 1)
+        report = (self.output_dir / "invalid_rows.tsv").read_text(encoding="utf-8-sig")
+        self.assertIn("no title field ('TitleA', 'TitleB') has both", report)
 
     def test_no_title_language_source_stops_generation(self) -> None:
         self._write_source(["TitleA", "TitleB"], [["A1", "B1"]])

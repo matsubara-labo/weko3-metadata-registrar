@@ -44,10 +44,12 @@ class LoadItemTypeExportTests(unittest.TestCase):
         self.assertEqual(
             fields["Title"].binding_templates,
             (
-                ".metadata.item_30001_title0[0].subitem_title",
-                ".metadata.item_30001_title0[0].subitem_title_language",
+                ".metadata.item_30001_title0[{index}].subitem_title",
+                ".metadata.item_30001_title0[{index}].subitem_title_language",
             ),
         )
+        self.assertTrue(fields["Title"].dynamically_repeatable)
+        self.assertFalse(fields["Title_g"].dynamically_repeatable)
         self.assertTrue(fields["Creator"].dynamically_repeatable)
         self.assertEqual(
             fields["Creator"].binding_templates,

@@ -38,7 +38,7 @@ def _schema() -> MetadataSchema:
         column_bindings={
             "Title": [".metadata.item_title"],
             "Issued": [".metadata.item_issued"],
-            "Dates": ".metadata.item_dates[{index}].interim",
+            "Dates": [".metadata.item_dates[{index}].interim"],
             "Note": [".metadata.item_note"],
         },
         default_languages={},
@@ -51,9 +51,10 @@ def _schema() -> MetadataSchema:
         display_columns={
             "Title": ["Title"],
             "Issued": ["Issued"],
-            "Dates": "Dates[{index}].None",
+            "Dates": ["Dates[{index}].None"],
             "Note": ["Note"],
         },
+        repeatable_fields=frozenset({"Dates"}),
     )
 
 

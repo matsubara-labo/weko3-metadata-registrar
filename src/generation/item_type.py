@@ -42,7 +42,11 @@ class ItemTypeField:
 
     @property
     def dynamically_repeatable(self) -> bool:
-        return self.shape == "array" and len(self.values) == 1
+        # An array item holds one value and, optionally, its language.
+        return (
+            self.shape == "array"
+            and sum(not value.language for value in self.values) == 1
+        )
 
     @property
     def binding_templates(self) -> tuple[str, ...]:
