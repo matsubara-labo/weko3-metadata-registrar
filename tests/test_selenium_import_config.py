@@ -58,22 +58,27 @@ class SeleniumImportConfigTests(unittest.TestCase):
             REPOSITORY_ROOT / "output" / "uploaded_zip_data",
         )
 
-    def test_base_url_resolution_uses_cli_then_environment_then_config(self) -> None:
+    def test_base_url_resolution_uses_cli_then_config_and_ignores_weko_url(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             base_dir = Path(temporary_directory)
             registration_config = self.write_registration_config(
                 base_dir, "https://config.example"
             )
+            (base_dir / ".env").write_text(
+                "WEKO_URL=https://dotenv.example\n", encoding="utf-8"
+            )
 
             cases = (
-                ("https://cli.example/", "https://env.example", "https://cli.example"),
-                (None, "https://env.example/", "https://env.example"),
-                (None, None, "https://config.example"),
+                ("https://cli.example/", "https://cli.example"),
+                (None, "https://config.example"),
             )
-            for cli_url, env_url, expected in cases:
-                with self.subTest(cli_url=cli_url, env_url=env_url):
-                    environment = {"WEKO_URL": env_url} if env_url else {}
-                    with patch.dict(os.environ, environment, clear=True):
+            for cli_url, expected in cases:
+                with self.subTest(cli_url=cli_url):
+                    with patch.dict(
+                        os.environ, {"WEKO_URL": "https://env.example"}, clear=True
+                    ):
                         config = WekoImportConfig(
                             base_dir=base_dir,
                             weko_base_url=cli_url,

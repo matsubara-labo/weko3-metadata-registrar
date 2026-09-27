@@ -174,12 +174,10 @@ ZIP内ではTSVを `data/output_write[_NNN].tsv` として格納します。入�
 
 ```text
 --weko-base-url
-  > 実行プロセスの環境変数 WEKO_URL
-  > .env の WEKO_URL
   > metadata_registration.json の weko_base_url
 ```
 
-CLIまたは `.env` でURLを上書きする場合は、生成時と登録時が異なるWEKO環境になっていないことを確認してください。
+環境変数や `.env` の `WEKO_URL` は参照されません。CLIでURLを上書きする場合は、生成時と登録時が異なるWEKO環境になっていないことを確認してください。
 
 ### 基本コマンド
 
@@ -202,7 +200,7 @@ uv run python src/scripts/selenium_auto_register.py --headless
 | 引数 | 既定値 | 説明 |
 |---|---|---|
 | `--base-dir PATH` | リポジトリルート | `.env` と既定入出力ディレクトリの基準 |
-| `--weko-base-url URL` | 環境変数、`.env`、または登録設定 | Seleniumの登録先URLを一時的に上書きする |
+| `--weko-base-url URL` | 登録設定の `weko_base_url` | Seleniumの登録先URLを一時的に上書きする |
 | `--registration-config PATH` | `config/metadata_registration.json` | 登録設定JSON |
 | `--selector-config PATH` | `config/weko_ui_selectors.json` | WEKO画面のUIセレクタ設定 |
 | `--zip-dir PATH` | `output/zip_data` | 登録対象ZIPのディレクトリ |
