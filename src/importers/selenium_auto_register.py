@@ -32,7 +32,6 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver, WebElement
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
 from urllib3.exceptions import ProtocolError
 
 from generation.registration_config import load_registration_settings
@@ -53,6 +52,7 @@ WEKO_FATAL_MESSAGE_KEYWORDS = (
     "the tsv file could not be read",
 )
 POLL_INTERVAL_SECONDS = 2
+ELEMENT_POLL_INTERVAL_SECONDS = 0.5
 RESULT_FILE_PREFIX = "List_Download_"
 PARTIAL_DOWNLOAD_SUFFIXES = (".crdownload", ".tmp", ".part")
 MAX_IMPORT_ATTEMPTS = 4
@@ -161,31 +161,54 @@ def sorted_zip_files(zip_dir: Path) -> list[Path]:
     return sorted(path for path in zip_dir.glob("*.zip") if path.is_file())
 
 
+def poll_candidates(
+    driver: WebDriver,
+    candidates: tuple[SelectorCandidate, ...],
+    timeout_ms: int,
+    condition_factory,
+    failure_message: str,
+) -> WebElement:
+    deadline = time.monotonic() + max(0, timeout_ms) / 1000
+    conditions = [condition_factory(candidate.as_locator()) for candidate in candidates]
+    last_error: Exception | None = None
+
+    while True:
+        for condition in conditions:
+            try:
+                result = condition(driver)
+            except Exception as exc:
+                if driver_session_lost(exc) or driver_connection_lost(exc):
+                    raise
+                last_error = exc
+                continue
+            if result:
+                return result
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(ELEMENT_POLL_INTERVAL_SECONDS, remaining))
+
+    candidate_descriptions = [
+        f"{candidate.by}={candidate.value}" for candidate in candidates
+    ]
+    raise TimeoutException(
+        f"{failure_message}: {candidate_descriptions}"
+    ) from last_error
+
+
 def wait_for_candidates(
     driver: WebDriver,
     candidates: tuple[SelectorCandidate, ...],
     timeout_ms: int,
     condition_factory,
 ) -> WebElement:
-    last_error: Exception | None = None
-    attempts = max(1, len(candidates))
-    timeout_per_selector = max(1.0, timeout_ms / 1000 / attempts)
-
-    for candidate in candidates:
-        locator = candidate.as_locator()
-        try:
-            return WebDriverWait(driver, timeout_per_selector).until(
-                condition_factory(locator)
-            )
-        except Exception as exc:
-            last_error = exc
-
-    candidate_descriptions = [
-        f"{candidate.by}={candidate.value}" for candidate in candidates
-    ]
-    raise TimeoutException(
-        f"Could not resolve any selector from: {candidate_descriptions}"
-    ) from last_error
+    return poll_candidates(
+        driver,
+        candidates,
+        timeout_ms,
+        condition_factory,
+        "Could not resolve any selector from",
+    )
 
 
 def any_candidate_present(
@@ -227,28 +250,21 @@ def wait_for_clickable(
 def wait_for_enabled(
     driver: WebDriver, candidates: tuple[SelectorCandidate, ...], timeout_ms: int
 ) -> WebElement:
-    last_error: Exception | None = None
-    attempts = max(1, len(candidates))
-    timeout_per_selector = max(1.0, timeout_ms / 1000 / attempts)
+    return poll_candidates(
+        driver,
+        candidates,
+        timeout_ms,
+        enabled_element_located,
+        "Could not resolve any enabled selector from",
+    )
 
-    for candidate in candidates:
-        locator = candidate.as_locator()
-        try:
 
-            def enabled_element(d: WebDriver) -> WebElement | bool:
-                element = d.find_element(*locator)
-                return element if element_is_enabled(element) else False
+def enabled_element_located(locator: tuple[str, str]):
+    def condition(driver: WebDriver) -> WebElement | bool:
+        element = driver.find_element(*locator)
+        return element if element_is_enabled(element) else False
 
-            return WebDriverWait(driver, timeout_per_selector).until(enabled_element)
-        except Exception as exc:
-            last_error = exc
-
-    candidate_descriptions = [
-        f"{candidate.by}={candidate.value}" for candidate in candidates
-    ]
-    raise TimeoutException(
-        f"Could not resolve any enabled selector from: {candidate_descriptions}"
-    ) from last_error
+    return condition
 
 
 def element_is_enabled(element: WebElement) -> bool:
@@ -285,7 +301,7 @@ def click_when_ready(
         pass
 
     try:
-        element = wait_for_enabled(driver, candidates, timeout_ms)
+        element = wait_for_enabled(driver, candidates, 0)
         click_element(driver, element)
         return
     except Exception as exc:
