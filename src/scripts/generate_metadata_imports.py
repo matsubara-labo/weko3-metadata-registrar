@@ -67,7 +67,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Remove all existing output_write*.tsv/import*.zip files in the output directory before generating. Without it, generation stops if any exist.",
+        help="Remove all existing output_write*.tsv/import*.zip/invalid_rows.tsv files in the output directory before generating. Without it, generation stops if any exist.",
+    )
+    parser.add_argument(
+        "--skip-invalid-rows",
+        action="store_true",
+        help="Generate from valid rows only and write invalid rows to invalid_rows.tsv in the output directory. Without it, generation stops if any row is invalid.",
     )
     return parser
 
@@ -85,10 +90,22 @@ def main() -> int:
         registration_config_path=args.registration_config,
         delimiter=args.delimiter,
         overwrite=args.overwrite,
+        skip_invalid_rows=args.skip_invalid_rows,
     )
+    skipped: list[int] = []
+
+    def report_invalid_rows(path: Path, count: int) -> None:
+        skipped.append(count)
+        print(f"skipped {count} invalid row(s); see {path}")
+
     artifacts = generate_metadata_artifacts(
-        config, on_remove=lambda path: print(f"removed {path}")
+        config,
+        on_remove=lambda path: print(f"removed {path}"),
+        on_invalid_rows=report_invalid_rows,
     )
+    if skipped and not artifacts:
+        print("No valid rows were found; no import files were generated.")
+        return 1
     print(summarize_artifacts(artifacts))
     for artifact in artifacts:
         print(

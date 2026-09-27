@@ -15,6 +15,7 @@ from generation.metadata_pipeline import (
     generate_metadata_artifacts,
     load_metadata_schema,
     load_rows,
+    load_rows_with_errors,
     normalize_row,
     write_tsv,
 )
@@ -88,6 +89,79 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
 
         with self.assertRaisesRegex(MetadataInputError, "RequiredField.*empty"):
             normalize_row({}, schema)
+
+    def _schema(
+        self, field_name: str, attribute: str, *, repeatable: bool
+    ) -> MetadataSchema:
+        binding = ".metadata.item_x[{index}].interim" if repeatable else [".x"]
+        display = f"{field_name}[{{index}}].None" if repeatable else [field_name]
+        return MetadataSchema(
+            item_type_name="Test(1)",
+            item_schema_url="https://weko.example.org/items/jsonschema/1",
+            base_metadata_bindings=[],
+            template_column_values={},
+            template_column_attributes={},
+            column_bindings={field_name: binding},
+            default_languages={},
+            field_attributes={field_name: attribute},
+            display_columns={field_name: display},
+        )
+
+    def test_empty_list_elements_do_not_satisfy_required_field(self) -> None:
+        for repeatable in (True, False):
+            schema = self._schema(
+                "Field", "Required, Allow Multiple", repeatable=repeatable
+            )
+            for text in ("[None]", "['']", "[' ', None]", "[]"):
+                with self.subTest(repeatable=repeatable, text=text):
+                    with self.assertRaisesRegex(MetadataInputError, "'Field' is empty"):
+                        normalize_row({"Field": text}, schema)
+
+    def test_empty_list_elements_are_dropped(self) -> None:
+        schema = self._schema("Field", "Allow Multiple", repeatable=True)
+
+        row = normalize_row({"Field": "['a', '', ' ', None, 'b']"}, schema)
+
+        self.assertEqual(row["Field"], ["a", "b"])
+
+    def test_scalar_field_uses_first_non_empty_element(self) -> None:
+        schema = self._schema("Field", "Required", repeatable=False)
+
+        self.assertEqual(
+            normalize_row({"Field": "['', ' ', 'x', 'y']"}, schema), {"Field": "x"}
+        )
+        self.assertEqual(
+            normalize_row({"Field": "  plain  "}, schema), {"Field": "plain"}
+        )
+
+    def test_all_row_errors_are_listed(self) -> None:
+        with self.assertRaises(MetadataInputError) as context:
+            self._load_text("input.csv", "Title\nok\n[1]\nfine\n[2]\n")
+
+        lines = str(context.exception).splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertRegex(lines[0], r"input\.csv:3: 'Title': .*int")
+        self.assertRegex(lines[1], r"input\.csv:5: 'Title': .*int")
+
+    def test_row_error_list_is_capped(self) -> None:
+        with self.assertRaises(MetadataInputError) as context:
+            self._load_text("input.csv", "Title\n" + "[1]\n" * 53)
+
+        lines = str(context.exception).splitlines()
+        self.assertEqual(len(lines), 51)
+        self.assertIn("input.csv:51:", lines[49])
+        self.assertEqual(lines[50], "... and 3 more")
+
+    def test_load_rows_with_errors_keeps_valid_rows_and_raw_cells(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            input_path = Path(temporary_directory) / "input.csv"
+            input_path.write_text("id,Title\n1,ok\n2,[1]\n3\n", encoding="utf-8")
+            rows, errors = load_rows_with_errors(input_path, self._title_schema())
+
+        self.assertEqual([row["Title"] for row in rows], [["ok"], []])
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].row_number, 3)
+        self.assertEqual(errors[0].cells, {"id": "2", "Title": "[1]"})
 
     def test_non_string_list_element_error_names_column(self) -> None:
         schema = MetadataSchema(

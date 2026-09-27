@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import csv
+import os
 import re
 import zipfile
 from collections.abc import Callable
@@ -101,9 +102,14 @@ WEKO_IMPORT_CONTROL_COLUMNS = (
 WEKO_TSV_FIELD_SIZE_LIMIT = 131072
 
 GENERATED_ARTIFACT_NAME_PATTERN = re.compile(
-    r"(?:output_write(?:_\d+)?\.tsv|import(?:_\d+)?\.zip)", re.IGNORECASE
+    r"(?:output_write(?:_\d+)?\.tsv|import(?:_\d+)?\.zip|invalid_rows\.tsv)",
+    re.IGNORECASE,
 )
 MAX_LISTED_EXISTING_ARTIFACTS = 10
+INVALID_ROWS_REPORT_NAME = "invalid_rows.tsv"
+# Leading report columns; a report fed back as input gets fresh values for them.
+INVALID_ROWS_REPORT_COLUMNS = ("_invalid_row", "_invalid_reason")
+MAX_LISTED_ROW_ERRORS = 50
 
 # Largest limit accepted on every platform (sys.maxsize overflows on Windows).
 INPUT_FIELD_SIZE_LIMIT = 2**31 - 1
@@ -148,6 +154,14 @@ class MetadataGenerationConfig:
     registration_config_path: Path = DEFAULT_REGISTRATION_CONFIG_PATH
     delimiter: str = "auto"
     overwrite: bool = False
+    skip_invalid_rows: bool = False
+
+
+@dataclass(frozen=True)
+class RowError:
+    row_number: int
+    message: str
+    cells: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -312,6 +326,7 @@ def normalize_row(
             values = parse_literal_list(source_row.get(field_name, ""))
         except MetadataInputError as exc:
             raise MetadataInputError(f"{field_name!r}: {exc}") from exc
+        values = [value for value in values if value.strip()]
         if "Required" in schema.field_attributes[field_name] and not values:
             raise MetadataInputError(f"Required metadata field {field_name!r} is empty")
         if isinstance(binding, str):
@@ -363,12 +378,37 @@ def validate_header_matches_schema(
     )
 
 
+def format_row_errors(input_path: Path, errors: list[RowError]) -> str:
+    lines = [
+        f"{input_path}:{error.row_number}: {error.message}"
+        for error in errors[:MAX_LISTED_ROW_ERRORS]
+    ]
+    remaining = len(errors) - len(lines)
+    if remaining > 0:
+        lines.append(f"... and {remaining} more")
+    return "\n".join(lines)
+
+
 def load_rows(
     input_path: Path,
     schema: MetadataSchema,
     date_like_fields: frozenset[str] = frozenset(),
     delimiter: str | None = None,
 ) -> list[dict[str, Any]]:
+    rows, errors = load_rows_with_errors(
+        input_path, schema, date_like_fields, delimiter
+    )
+    if errors:
+        raise MetadataInputError(format_row_errors(input_path, errors))
+    return rows
+
+
+def load_rows_with_errors(
+    input_path: Path,
+    schema: MetadataSchema,
+    date_like_fields: frozenset[str] = frozenset(),
+    delimiter: str | None = None,
+) -> tuple[list[dict[str, Any]], list[RowError]]:
     if not input_path.exists():
         raise FileNotFoundError(f"Input file was not found: {input_path}")
 
@@ -384,21 +424,22 @@ def load_rows(
                     validate_header_matches_schema(
                         input_path, list(reader.fieldnames), schema, delimiter
                     )
+                fieldnames = list(reader.fieldnames or [])
                 rows: list[dict[str, Any]] = []
+                errors: list[RowError] = []
                 for row_number, row in enumerate(reader, start=2):
                     try:
                         rows.append(normalize_row(row, schema, date_like_fields))
                     except MetadataInputError as exc:
-                        raise MetadataInputError(
-                            f"{input_path}:{row_number}: {exc}"
-                        ) from exc
+                        cells = {name: row.get(name) or "" for name in fieldnames}
+                        errors.append(RowError(row_number, str(exc), cells))
             except csv.Error as exc:
                 # DictReader.line_num is only updated after a successful row.
                 line = reader.reader.line_num
                 raise MetadataInputError(
                     f"{input_path}: line {line}: malformed input: {exc}"
                 ) from exc
-            return rows
+            return rows, errors
     finally:
         csv.field_size_limit(previous_limit)
 
@@ -504,6 +545,26 @@ def write_tsv(
             writer.writerow(build_value_row(row, max_lengths, schema))
 
 
+def write_invalid_rows_report(errors: list[RowError], output_path: Path) -> None:
+    fieldnames = [
+        name
+        for name in (errors[0].cells if errors else [])
+        if name not in INVALID_ROWS_REPORT_COLUMNS
+    ]
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+        writer = csv.writer(file_obj, delimiter="\t", lineterminator="\n")
+        writer.writerow([*INVALID_ROWS_REPORT_COLUMNS, *fieldnames])
+        for error in errors:
+            writer.writerow(
+                [
+                    str(error.row_number),
+                    error.message,
+                    *(error.cells.get(name, "") for name in fieldnames),
+                ]
+            )
+
+
 def zip_tsv(tsv_path: Path, zip_path: Path) -> None:
     zip_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -545,10 +606,17 @@ def _format_existing_artifacts_error(output_dir: Path, existing: list[Path]) -> 
     )
 
 
+def _is_same_file(path: Path, other: Path) -> bool:
+    if path.exists() and other.exists():
+        return os.path.samefile(path, other)
+    return path.resolve() == other.resolve()
+
+
 def generate_metadata_artifacts(
     config: MetadataGenerationConfig,
     *,
     on_remove: Callable[[Path], None] | None = None,
+    on_invalid_rows: Callable[[Path, int], None] | None = None,
 ) -> list[GeneratedArtifact]:
     existing = find_generated_artifacts(config.output_dir)
     if existing and not config.overwrite:
@@ -558,19 +626,37 @@ def generate_metadata_artifacts(
 
     runtime = _build_metadata_runtime(config)
     schema = runtime.schema
-    rows = load_rows(
+    rows, errors = load_rows_with_errors(
         config.input_path,
         schema,
         runtime.date_like_fields,
         resolve_delimiter(config.delimiter),
     )
-    if not rows:
+    if errors and not config.skip_invalid_rows:
+        raise MetadataInputError(format_row_errors(config.input_path, errors))
+    if not rows and not errors:
         return []
 
-    for path in existing:
+    removable = [
+        path for path in existing if not _is_same_file(path, config.input_path)
+    ]
+    if not rows:
+        # Without valid rows, keep previous import files and only replace the report.
+        removable = [
+            path for path in removable if path.name.lower() == INVALID_ROWS_REPORT_NAME
+        ]
+    for path in removable:
         path.unlink()
         if on_remove is not None:
             on_remove(path)
+
+    if errors:
+        report_path = config.output_dir / INVALID_ROWS_REPORT_NAME
+        write_invalid_rows_report(errors, report_path)
+        if on_invalid_rows is not None:
+            on_invalid_rows(report_path, len(errors))
+    if not rows:
+        return []
 
     chunks = chunk_rows(rows, config.chunk_size)
     artifacts: list[GeneratedArtifact] = []
