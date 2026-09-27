@@ -133,6 +133,7 @@ class WekoImportConfig:
     limit: int | None = None
     delete_zip_after_import: bool = False
     keep_zip_after_import: bool = False
+    ignore_certificate_errors: bool = False
     processed_zip_dir: Path | None = None
     failed_zip_dir: Path | None = None
     ledger_path: Path | None = None
@@ -173,6 +174,7 @@ class WekoImportConfig:
 class ImportRunResults:
     imported: list[tuple[Path, Path]]
     skipped: list[tuple[Path, LedgerRecord]]
+    limited_to_zero: bool = False
 
 
 def load_selector_config(selector_config_path: Path) -> WekoSelectors:
@@ -703,10 +705,13 @@ def driver_connection_lost(exc: BaseException) -> bool:
     return False
 
 
-def build_chrome_options(download_dir: Path, headless: bool) -> Options:
+def build_chrome_options(
+    download_dir: Path, headless: bool, ignore_certificate_errors: bool = False
+) -> Options:
     options = Options()
-    options.add_argument("--ignore-certificate-errors")
-    options.add_argument("--allow-insecure-localhost")
+    if ignore_certificate_errors:
+        options.add_argument("--ignore-certificate-errors")
+        options.add_argument("--allow-insecure-localhost")
     if headless:
         options.add_argument("--headless=new")
     prefs = {
@@ -721,7 +726,9 @@ def build_chrome_options(download_dir: Path, headless: bool) -> Options:
 
 def create_driver(config: WekoImportConfig, download_dir: Path) -> WebDriver:
     driver = webdriver.Chrome(
-        options=build_chrome_options(download_dir, config.headless)
+        options=build_chrome_options(
+            download_dir, config.headless, config.ignore_certificate_errors
+        )
     )
     if not config.headless:
         driver.maximize_window()
@@ -849,6 +856,10 @@ def import_one_zip(
 
 
 def run_import(config: WekoImportConfig) -> ImportRunResults:
+    if config.delete_zip_after_import and config.keep_zip_after_import:
+        raise ValueError(
+            "delete_zip_after_import and keep_zip_after_import cannot both be enabled"
+        )
     config = replace(config, weko_base_url=resolve_weko_base_url(config))
     config = replace(config, selectors=resolve_selectors(config))
     zip_dir = config.resolved_zip_dir()
@@ -859,6 +870,8 @@ def run_import(config: WekoImportConfig) -> ImportRunResults:
     download_dir.mkdir(parents=True, exist_ok=True)
 
     zip_files = sorted_zip_files(zip_dir)
+    if config.limit == 0 and zip_files:
+        return ImportRunResults(imported=[], skipped=[], limited_to_zero=True)
     if config.limit is not None:
         zip_files = zip_files[: config.limit]
     results = ImportRunResults(imported=[], skipped=[])
@@ -985,6 +998,16 @@ def run_import(config: WekoImportConfig) -> ImportRunResults:
     return results
 
 
+def non_negative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid int value: {value!r}") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(f"must be a non-negative integer: {value}")
+    return parsed
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Import WEKO metadata zip files with Selenium."
@@ -1011,9 +1034,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--import-timeout-ms", type=int, default=480_000)
     parser.add_argument("--download-timeout-ms", type=int, default=120_000)
     parser.add_argument("--post-login-timeout-ms", type=int, default=45_000)
-    parser.add_argument("--limit", type=int)
-    parser.add_argument("--delete-zip-after-import", action="store_true")
-    parser.add_argument("--keep-zip-after-import", action="store_true")
+    parser.add_argument(
+        "--ignore-certificate-errors",
+        action="store_true",
+        help="Ignore TLS certificate errors (e.g. self-signed WEKO). "
+        "Do not use against a server with a valid certificate.",
+    )
+    parser.add_argument("--limit", type=non_negative_int)
+    zip_handling = parser.add_mutually_exclusive_group()
+    zip_handling.add_argument("--delete-zip-after-import", action="store_true")
+    zip_handling.add_argument("--keep-zip-after-import", action="store_true")
     parser.add_argument("--processed-zip-dir", type=Path)
     parser.add_argument(
         "--failed-zip-dir",
@@ -1047,6 +1077,7 @@ def main() -> int:
         zip_dir=args.zip_dir,
         download_dir=args.download_dir,
         headless=args.headless,
+        ignore_certificate_errors=args.ignore_certificate_errors,
         ui_timeout_ms=args.ui_timeout_ms,
         load_timeout_ms=args.load_timeout_ms,
         import_timeout_ms=args.import_timeout_ms,
@@ -1063,7 +1094,9 @@ def main() -> int:
 
     results = run_import(config)
     if not results.imported:
-        if results.skipped:
+        if results.limited_to_zero:
+            print("No zip files were imported because --limit 0 was given.")
+        elif results.skipped:
             print(
                 f"No zip files were imported; {len(results.skipped)} zip file(s) "
                 "were skipped because they are already in the import ledger."

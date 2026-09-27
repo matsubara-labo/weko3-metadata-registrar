@@ -212,11 +212,15 @@ uv run python src/scripts/selenium_auto_register.py --headless
 | `--ledger-path PATH` | `output/import_ledger.jsonl` | インポート台帳（JSON Lines、追記のみ）のパス |
 | `--allow-reimport` | 無効 | 台帳に記録済みのZIPもスキップせずに登録する |
 | `--headless` | 無効 | Chromeを画面に表示せず実行する |
-| `--limit N` | 制限なし | ファイル名順の先頭N件だけ登録する |
-| `--keep-zip-after-import` | 無効 | 全件登録に成功したZIPを元の場所に残す |
-| `--delete-zip-after-import` | 無効 | 全件登録に成功したZIPを削除する |
+| `--ignore-certificate-errors` | 無効 | TLS証明書エラーを無視する（自己署名証明書のWEKO向け。後述） |
+| `--limit N` | 制限なし | ファイル名順の先頭N件だけ登録する。0以上の整数のみ指定可能 |
+| `--keep-zip-after-import` | 無効 | 全件登録に成功したZIPを元の場所に残す（`--delete-zip-after-import` と同時指定不可） |
+| `--delete-zip-after-import` | 無効 | 全件登録に成功したZIPを削除する（`--keep-zip-after-import` と同時指定不可） |
 
 `--zip-dir`、`--download-dir`、`--processed-zip-dir`、`--failed-zip-dir`、`--ledger-path` の既定値は、`--base-dir` を基準に解決されます。明示的に指定したパスは、実行時のカレントディレクトリを基準に解決されます。
+
+> [!WARNING]
+> 既定ではTLS証明書を検証します（以前のバージョンでは常に証明書エラーを無視していました）。`https://<IPアドレス>` のように自己署名証明書を使うWEKOへ接続する場合は、`--ignore-certificate-errors` を指定してください。このオプションはChromeに `--ignore-certificate-errors` と `--allow-insecure-localhost` を渡し、接続先の取り違えにも気づけなくなるため、正規の証明書を持つ本番環境に対しては使用しないでください。
 
 ### タイムアウト引数
 
@@ -271,11 +275,11 @@ WEKO上の既存アイテムを識別子（`corpusid` など）で検索して�
 | `--keep-zip-after-import` | 元のディレクトリに残す |
 | `--delete-zip-after-import` | 削除する |
 
-`--delete-zip-after-import` による削除は元に戻せません。`--keep-zip-after-import` と同時に指定しないでください。両方を指定した場合、現行実装では削除が優先されます。
+`--delete-zip-after-import` による削除は元に戻せません。`--keep-zip-after-import` と `--delete-zip-after-import` は同時に指定できず、両方を指定するとコマンドはエラーで終了します（`WekoImportConfig` で両方を有効にして `run_import` を呼んだ場合も、ZIPを処理する前に `ValueError` になります）。
 
 失敗行がある場合、件数が一致しない場合、または結果ファイルを解析できない場合は、上記のオプションにかかわらずZIPを削除せず、元のディレクトリにも残さずに `output/failed_zip_data`（`--failed-zip-dir` で変更可能）へ移動します。同名のファイルがある場合は連番を付けて移動します。このとき成功件数・失敗件数・期待件数と、失敗行（最大20行）の No.、Item ID、ステータス、インポート結果を表示し、`ImportResultError` で処理を中断します。この場合は再試行しません。一部のレコードがすでに登録されている可能性があるため、WEKO上の登録状況と結果ファイルを確認してから、必要なレコードだけを再投入してください。
 
-コンソールに `imported=<zip-path> result=<download-path>` が表示され、結果ファイルが保存されていることを確認してください。登録対象がない場合は `No zip files were found to import.` と表示して終了します。登録対象のZIPがすべて台帳によりスキップされた場合は、`No zip files were imported; <件数> zip file(s) were skipped because they are already in the import ledger.` と表示して終了します。
+コンソールに `imported=<zip-path> result=<download-path>` が表示され、結果ファイルが保存されていることを確認してください。登録対象がない場合は `No zip files were found to import.` と表示して終了します。登録対象のZIPがあっても `--limit 0` を指定した場合は、`No zip files were imported because --limit 0 was given.` と表示して終了します。登録対象のZIPがすべて台帳によりスキップされた場合は、`No zip files were imported; <件数> zip file(s) were skipped because they are already in the import ledger.` と表示して終了します。
 
 ## 生成物の仕様
 

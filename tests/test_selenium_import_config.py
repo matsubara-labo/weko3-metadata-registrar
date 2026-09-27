@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import tempfile
@@ -7,14 +9,17 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from importers import selenium_auto_register
 from importers.selenium_auto_register import (
     DEFAULT_REGISTRATION_CONFIG_PATH,
     DEFAULT_SELECTOR_CONFIG_PATH,
     REPOSITORY_ROOT,
     WekoImportConfig,
+    build_chrome_options,
     build_parser,
     resolve_selectors,
     resolve_weko_base_url,
+    run_import,
 )
 
 
@@ -108,6 +113,91 @@ class SeleniumImportConfigTests(unittest.TestCase):
         )
         selectors = resolve_selectors(WekoImportConfig(base_dir=REPOSITORY_ROOT))
         self.assertTrue(selectors.email_input)
+
+    def assert_parser_rejects(self, argv: list[str]) -> None:
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                build_parser().parse_args(argv)
+
+    def test_parser_rejects_both_zip_handling_flags(self) -> None:
+        self.assert_parser_rejects(
+            ["--keep-zip-after-import", "--delete-zip-after-import"]
+        )
+        self.assertTrue(
+            build_parser().parse_args(["--keep-zip-after-import"]).keep_zip_after_import
+        )
+
+    def test_parser_rejects_negative_limit(self) -> None:
+        self.assert_parser_rejects(["--limit", "-1"])
+        self.assert_parser_rejects(["--limit", "abc"])
+        self.assertEqual(build_parser().parse_args(["--limit", "0"]).limit, 0)
+        self.assertIsNone(build_parser().parse_args([]).limit)
+
+    def test_run_import_rejects_both_zip_handling_options(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            zip_dir = Path(directory) / "zip_data"
+            zip_dir.mkdir()
+            zip_path = zip_dir / "import.zip"
+            zip_path.write_bytes(b"zip")
+            config = WekoImportConfig(
+                base_dir=Path(directory),
+                weko_base_url="https://weko.example",
+                zip_dir=zip_dir,
+                delete_zip_after_import=True,
+                keep_zip_after_import=True,
+            )
+            with patch.object(selenium_auto_register, "create_driver") as create:
+                with self.assertRaisesRegex(ValueError, "cannot both"):
+                    run_import(config)
+            create.assert_not_called()
+            self.assertTrue(zip_path.exists())
+
+    def test_certificate_errors_are_ignored_only_when_enabled(self) -> None:
+        insecure_args = {"--ignore-certificate-errors", "--allow-insecure-localhost"}
+        with tempfile.TemporaryDirectory() as directory:
+            default_options = build_chrome_options(Path(directory), headless=False)
+            enabled_options = build_chrome_options(
+                Path(directory), headless=False, ignore_certificate_errors=True
+            )
+        self.assertFalse(insecure_args & set(default_options.arguments))
+        self.assertTrue(insecure_args <= set(enabled_options.arguments))
+        self.assertFalse(build_parser().parse_args([]).ignore_certificate_errors)
+        self.assertTrue(
+            build_parser()
+            .parse_args(["--ignore-certificate-errors"])
+            .ignore_certificate_errors
+        )
+
+    def run_main(self, base_dir: Path, *extra: str) -> str:
+        output = io.StringIO()
+        argv = [
+            "selenium_auto_register",
+            "--base-dir",
+            str(base_dir),
+            "--weko-base-url",
+            "https://weko.example",
+            *extra,
+        ]
+        with (
+            patch("sys.argv", argv),
+            patch.object(selenium_auto_register, "create_driver") as create_driver,
+            contextlib.redirect_stdout(output),
+        ):
+            self.assertEqual(selenium_auto_register.main(), 0)
+        create_driver.assert_not_called()
+        return output.getvalue()
+
+    def test_main_reports_limit_zero_separately(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base_dir = Path(directory)
+            zip_dir = base_dir / "output" / "zip_data"
+            zip_dir.mkdir(parents=True)
+            self.assertIn("No zip files were found to import.", self.run_main(base_dir))
+            (zip_dir / "import.zip").write_bytes(b"zip")
+            output = self.run_main(base_dir, "--limit", "0")
+            self.assertTrue((zip_dir / "import.zip").exists())
+        self.assertIn("No zip files were imported because --limit 0 was given.", output)
+        self.assertNotIn("No zip files were found to import.", output)
 
 
 if __name__ == "__main__":
