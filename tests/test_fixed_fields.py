@@ -77,23 +77,27 @@ class FixedFieldColumnTests(unittest.TestCase):
         self.addCleanup(temporary_directory.cleanup)
         self.root = Path(temporary_directory.name)
 
-    def _generate(self, *, fixed_required: bool = False) -> list[list[str]]:
+    def _generate(
+        self,
+        *,
+        fixed_required: bool = False,
+        configured_publish_status: str | None = None,
+        publish_status: str | None = None,
+    ) -> list[list[str]]:
         export_path = self.root / "export.zip"
         _write_export(export_path, fixed_required=fixed_required)
+        settings = {
+            "weko_base_url": "https://weko.example.org",
+            "item_type_export": str(export_path),
+            "indexes": {"Example": "999"},
+            "default_index": "Example",
+            "publish_date": "2026-08-23",
+            "default_languages": {"Note": "en", "Tags": "ja"},
+        }
+        if configured_publish_status is not None:
+            settings["publish_status"] = configured_publish_status
         settings_path = self.root / "settings.json"
-        settings_path.write_text(
-            json.dumps(
-                {
-                    "weko_base_url": "https://weko.example.org",
-                    "item_type_export": str(export_path),
-                    "indexes": {"Example": "999"},
-                    "default_index": "Example",
-                    "publish_date": "2026-08-23",
-                    "default_languages": {"Note": "en", "Tags": "ja"},
-                }
-            ),
-            encoding="utf-8",
-        )
+        settings_path.write_text(json.dumps(settings), encoding="utf-8")
         source_path = self.root / "source.csv"
         with source_path.open("w", encoding="utf-8", newline="") as file_obj:
             writer = csv.writer(file_obj)
@@ -104,8 +108,9 @@ class FixedFieldColumnTests(unittest.TestCase):
         artifacts = generate_metadata_artifacts(
             MetadataGenerationConfig(
                 input_path=source_path,
-                output_dir=self.root / "output",
+                output_dir=Path(tempfile.mkdtemp(dir=self.root)),
                 registration_config_path=settings_path,
+                publish_status=publish_status,
             )
         )
         with artifacts[0].tsv_path.open(
@@ -160,6 +165,69 @@ class FixedFieldColumnTests(unittest.TestCase):
         self.assertEqual(values[1][".metadata.item_note.note"], "")
         self.assertEqual(values[1][".metadata.item_tags[0].tag"], "z")
         self.assertEqual(values[1][".metadata.item_tags[1].tag"], "")
+
+    def test_publish_status_stays_aligned_with_control_and_fixed_columns(
+        self,
+    ) -> None:
+        cases = (
+            (None, None, "public"),
+            ("private", None, "private"),
+            ("private", "public", "public"),
+        )
+        for configured, override, expected in cases:
+            with self.subTest(configured=configured, override=override):
+                rows = self._generate(
+                    configured_publish_status=configured, publish_status=override
+                )
+                base = slice(0, CONTROL_COLUMN_COUNT + 5)
+                self.assertEqual(
+                    rows[1][base],
+                    [
+                        "#.id",
+                        ".uri",
+                        ".metadata.path[0]",
+                        ".pos_index[0]",
+                        ".publish_status",
+                        ".feedback_mail[0]",
+                        ".researchmap_linkage",
+                        ".cnri",
+                        ".doi_ra",
+                        ".doi",
+                        ".edit_mode",
+                        ".metadata.pubdate",
+                        ".metadata.item_fixed_object.fixed_value",
+                        ".metadata.item_fixed_object.fixed_value_language",
+                        ".metadata.item_fixed_array[0].fixed_item",
+                        ".metadata.item_fixed_array[0].fixed_item_language",
+                    ],
+                )
+                self.assertEqual(rows[2][4], ".PUBLISH_STATUS")
+                self.assertEqual(rows[4][4], "Required")
+                for row in rows[5:]:
+                    self.assertEqual(
+                        row[base],
+                        [
+                            "",
+                            "",
+                            "999",
+                            "Example",
+                            expected,
+                            "",
+                            "",
+                            "",
+                            "",
+                            "",
+                            "keep",
+                            "2026-08-23",
+                            "",
+                            "",
+                            "",
+                            "",
+                        ],
+                    )
+                self.assertEqual(
+                    rows[5][rows[1].index(".metadata.item_title")], "First"
+                )
 
     def test_required_fixed_field_without_value_is_rejected(self) -> None:
         with self.assertRaisesRegex(MetadataInputError, "FixedObject"):
