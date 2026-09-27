@@ -229,7 +229,7 @@ def parse_literal_list(raw_value: Any) -> list[str]:
     if raw_value in (None, ""):
         return []
     if isinstance(raw_value, list):
-        return [str(value) for value in raw_value]
+        return [str(value).strip() for value in raw_value]
 
     text = str(raw_value).strip()
     if not text:
@@ -250,7 +250,7 @@ def parse_literal_list(raw_value: Any) -> list[str]:
         if value is None:
             values.append("")
         elif isinstance(value, str):
-            values.append(value)
+            values.append(value.strip())
         else:
             raise MetadataInputError(
                 f"List element {value!r} is of type {type(value).__name__}; "

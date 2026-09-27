@@ -23,7 +23,21 @@ class ParseLiteralListTests(unittest.TestCase):
                 self.assertEqual(parse_literal_list(text), [text])
 
     def test_plain_string_is_stripped(self) -> None:
-        self.assertEqual(parse_literal_list("  1.50 \n"), ["1.50"])
+        for text, expected in (
+            ("  1.50 \n", "1.50"),
+            ("  indented", "indented"),
+            ("trailing  ", "trailing"),
+            ("\u3000全角\u3000", "全角"),
+            ("\xa0nbsp\xa0", "nbsp"),
+            ("\n line1\n line2 \n", "line1\n line2"),
+            ("  [draft] ", "[draft]"),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(parse_literal_list(text), [expected])
+
+    def test_list_elements_are_stripped(self) -> None:
+        self.assertEqual(parse_literal_list("[' a ', '\u3000b']"), ["a", "b"])
+        self.assertEqual(parse_literal_list("['  ']"), [""])
 
     def test_quoted_string_list_is_split(self) -> None:
         self.assertEqual(parse_literal_list("['Alice', 'Bob']"), ["Alice", "Bob"])
@@ -57,6 +71,7 @@ class ParseLiteralListTests(unittest.TestCase):
 
     def test_list_input_is_stringified(self) -> None:
         self.assertEqual(parse_literal_list(["a", 1]), ["a", "1"])
+        self.assertEqual(parse_literal_list([" a ", "\u3000b\n"]), ["a", "b"])
 
 
 if __name__ == "__main__":
