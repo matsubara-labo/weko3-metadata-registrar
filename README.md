@@ -82,6 +82,7 @@ WEKO内でAdministration >  WorkFlow > FlowList・WorkFlow Listに移動し、Wo
 | `default_index` | 必須 | `--index-name`（後述） を省略した場合に使用するIndex名 |
 | `publish_date` | 必須 | `--publish-date`（後述） を省略した場合に使用する公開日。`2025-05-27` のようにゼロ埋めした `YYYY-MM-DD` 形式の実在する日付で指定する（それ以外は設定エラー） |
 | `default_languages` | 必須 | 言語子項目（`*_language`）を持つ項目の既定の言語コード（例: `en`）を、入力列名ごとに指定するオブジェクト。行ごとの言語は入力の `<列名>_lang` 列で上書きできる（後述）。タイトル項目のいずれにも、ここにも入力の `<列名>_lang` 列にも言語がなければ生成を停止する |
+| `publish_status` | 任意 | `.PUBLISH_STATUS` に設定する公開ステータス。`public`（公開、既定値）または `private`（非公開）のみ指定可能 |
 
 `Index` はメタデータの登録先となるWEKO上のコレクションです。対象WEKOのIndex管理画面で登録先のIndex名とIndexIDを確認し、`indexes` に設定してください。
 （メタデータの登録結果（[例](./sample/ResearchArtifact(40001).tsv)や、ワークフローの設定画面から確認できます）
@@ -158,6 +159,7 @@ uv run python src/scripts/generate_metadata_imports.py \
 | `--registration-config PATH` | 任意 | `config/metadata_registration.json` | 登録設定JSON |
 | `--index-name NAME` | 任意 | 設定の `default_index` | 使用するIndex名。IndexIDは `indexes` から解決する |
 | `--publish-date YYYY-MM-DD` | 任意 | 設定の `publish_date` | 公開日を一時的に上書きする。`YYYY-MM-DD` 形式の実在する日付でない場合はエラー |
+| `--publish-status {public,private}` | 任意 | 設定の `publish_status`（未設定時は `public`） | 公開ステータスを一時的に上書きする |
 | `--chunk-size N` | 任意 | `0` | 1ファイル当たりのレコード数。`0` は分割しない |
 | `--zip` | 任意 | 無効 | TSVに加えて登録用ZIPを生成する |
 | `--keep-tsv` | 任意 | 無効 | `--zip` 使用時もZIP化前のTSVを残す |
@@ -208,12 +210,10 @@ uv run python src/scripts/generate_metadata_imports.py \
 
 ```text
 --weko-base-url
-  > 実行プロセスの環境変数 WEKO_URL
-  > .env の WEKO_URL
   > metadata_registration.json の weko_base_url
 ```
 
-CLIまたは `.env` でURLを上書きする場合は、生成時と登録時が異なるWEKO環境になっていないことを確認してください。
+環境変数や `.env` の `WEKO_URL` は参照されません。CLIでURLを上書きする場合は、生成時と登録時が異なるWEKO環境になっていないことを確認してください。
 
 ### 基本コマンド
 
@@ -236,22 +236,29 @@ uv run python src/scripts/selenium_auto_register.py --headless
 | 引数 | 既定値 | 説明 |
 |---|---|---|
 | `--base-dir PATH` | リポジトリルート | `.env` と既定入出力ディレクトリの基準 |
-| `--weko-base-url URL` | 環境変数、`.env`、または登録設定 | Seleniumの登録先URLを一時的に上書きする |
+| `--weko-base-url URL` | 登録設定の `weko_base_url` | Seleniumの登録先URLを一時的に上書きする |
 | `--registration-config PATH` | `config/metadata_registration.json` | 登録設定JSON |
 | `--selector-config PATH` | `config/weko_ui_selectors.json` | WEKO画面のUIセレクタ設定 |
 | `--zip-dir PATH` | `output/zip_data` | 登録対象ZIPのディレクトリ |
 | `--download-dir PATH` | `output/import_results` | WEKOから取得するインポート結果の保存先 |
 | `--processed-zip-dir PATH` | `output/uploaded_zip_data` | 登録済みZIPの移動先 |
+| `--failed-zip-dir PATH` | `output/failed_zip_data` | 失敗・要確認ZIP（インポート結果に失敗が含まれるZIP、またはImport後に結果を確認できなかったZIP）の移動先 |
+| `--ledger-path PATH` | `output/import_ledger.jsonl` | インポート台帳（JSON Lines、追記のみ）のパス |
+| `--allow-reimport` | 無効 | 台帳に記録済みのZIPもスキップせずに登録する |
 | `--headless` | 無効 | Chromeを画面に表示せず実行する |
-| `--limit N` | 制限なし | ファイル名順の先頭N件だけ登録する |
-| `--keep-zip-after-import` | 無効 | 登録済みZIPを元の場所に残す |
-| `--delete-zip-after-import` | 無効 | 登録成功後のZIPを削除する |
+| `--ignore-certificate-errors` | 無効 | TLS証明書エラーを無視する（自己署名証明書のWEKO向け。後述） |
+| `--limit N` | 制限なし | ファイル名順の先頭N件だけ登録する。0以上の整数のみ指定可能 |
+| `--keep-zip-after-import` | 無効 | 全件登録に成功したZIPを元の場所に残す（`--delete-zip-after-import` と同時指定不可） |
+| `--delete-zip-after-import` | 無効 | 全件登録に成功したZIPを削除する（`--keep-zip-after-import` と同時指定不可） |
 
-`--zip-dir`、`--download-dir`、`--processed-zip-dir` の既定値は、`--base-dir` を基準に解決されます。明示的に指定したパスは、実行時のカレントディレクトリを基準に解決されます。
+`--zip-dir`、`--download-dir`、`--processed-zip-dir`、`--failed-zip-dir`、`--ledger-path` の既定値は、`--base-dir` を基準に解決されます。明示的に指定したパスは、実行時のカレントディレクトリを基準に解決されます。
+
+> [!WARNING]
+> 既定ではTLS証明書を検証します（以前のバージョンでは常に証明書エラーを無視していました）。`https://<IPアドレス>` のように自己署名証明書を使うWEKOへ接続する場合は、`--ignore-certificate-errors` を指定してください。このオプションはChromeに `--ignore-certificate-errors` と `--allow-insecure-localhost` を渡し、接続先の取り違えにも気づけなくなるため、正規の証明書を持つ本番環境に対しては使用しないでください。
 
 ### タイムアウト引数
 
-すべてミリ秒単位です。
+すべてミリ秒単位です。各値はその工程全体の待機時間の上限で、UIセレクタの候補数では分割されません。候補は定期的に先頭から順に確認し、最初に条件を満たした要素を使います。
 
 | 引数 | 既定値 | 対象 |
 |---|---:|---|
@@ -261,21 +268,52 @@ uv run python src/scripts/selenium_auto_register.py --headless
 | `--import-timeout-ms` | `480000` | インポート完了の待機 |
 | `--download-timeout-ms` | `120000` | 結果ファイルのダウンロード完了待機 |
 
-WebDriverの切断と判定された場合に限り、1ファイルにつき最大4回試行します。その他のエラーでは処理を中断し、未処理のZIPはそのまま残ります。
+Importボタンのクリックを試みる前にWebDriverの切断と判定された場合に限り、ログインからやり直して1ファイルにつき最大4回試行します。その他のエラーでは処理を中断し、未処理のZIPはそのまま残ります。
+
+WEKO画面にエラー表示（インポート実行中、Celery停止、サーバ内部エラーなど）が出た場合や、Checkタブでチェックエラーが1件以上ある場合は、タイムアウトを待たずに即座に処理を中断します。チェックエラーの場合は、エラーのある行番号と内容をエラーメッセージに出力します。Importボタンのクリック前にこれらが発生した場合、対象ZIPは元の場所に残ります。
+
+### Import後のエラー（要手動確認）
+
+Importボタンのクリックを試みた後は、クリックがWEKOに届いたかどうかを判別できないため、自動再試行を行いません。クリック以降（インポート完了待機、結果のダウンロードとその待機・タイムアウトを含む）に発生したエラーは、WebDriverの切断であっても `ImportOutcomeUnknownError` として扱います。このとき対象ZIPを失敗・要確認ZIPとして `output/failed_zip_data`（`--failed-zip-dir` で変更可能）へ移動し、登録結果が不明であることを表示して処理を中断します。重複登録を避けるため、WEKO上で該当アイテムが登録されたかどうかを手動で確認してから、必要な場合だけ再投入してください。
+
+### インポート台帳と再実行時のスキップ
+
+同一データの重複登録を防ぐため、各ZIPの投入状況を追記専用のインポート台帳 `output/import_ledger.jsonl`（`--ledger-path` で変更可能）に記録します。台帳はJSON Lines形式で、1行が1件の記録です。各行は書き込むたびにディスクへ同期します。
+
+| キー | 内容 |
+|---|---|
+| `timestamp` | 記録日時（ローカル時刻、UTCオフセット付きISO 8601） |
+| `zip_name` | ZIPのファイル名 |
+| `sha256` | ZIPファイル内容のSHA-256 |
+| `status` | `started`（Importボタンのクリック直前）、`succeeded`（結果検証に成功）、`failed`（結果検証に失敗）、`unknown`（Import後のエラーで結果不明） |
+| `result_path` | 結果ファイルのパス（ある場合のみ） |
+| `detail` | エラー内容などの補足（ある場合のみ） |
+
+各ZIPの登録前にSHA-256を計算し、同じ内容の記録が台帳にあれば、ファイル名が変わっていてもそのZIPを登録せずにスキップします（ステータスは問いません）。スキップ時は、前回のステータスと記録日時を表示し、ZIPは移動しません。`started` だけが残っている記録は、前回の実行が途中で中断された（Ctrl+Cなど）ことを示し、登録済みの可能性があるため同様にスキップします。WEKO上の状況を確認したうえで再登録する場合は、`--allow-reimport` を指定してください。`--limit N` はスキップ対象を含むファイル名順の先頭N件に適用され、終了時にスキップした件数を表示します。台帳の空行や解析できない行は警告を表示して読み飛ばします。
+
+WEKO上の既存アイテムを識別子（`corpusid` など）で検索して重複を確認する機能は実装していません。台帳は、このツールで投入したZIPの内容だけを照合します。
 
 ### 登録後のファイル
 
-登録に成功すると、WEKOからダウンロードした結果ファイルを `output/import_results` に保存します。登録対象ZIPは、指定したオプションに応じて次のように処理します。
+インポートが完了すると、WEKOのResultタブからダウンロードした結果ファイル（TSV、またはWEKOの設定によりCSV）を `output/import_results` に保存し、その内容を検証します。次の条件をすべて満たす場合だけ、ZIPの登録に成功したとみなします。
 
-| オプション | 登録成功後のZIP |
+- 結果ファイルに1行以上のレコードがある
+- 結果ファイルのレコード数が、ZIP内のTSVに含まれるデータ行数（先頭セルが `#` で始まらない行）と一致する
+- すべての行のステータスが `Done`（`完了`）、インポート結果が `Success`（`成功`）である
+
+全件成功したZIPは、指定したオプションに応じて次のように処理し、`result: success=<成功件数>/<件数>` を表示します。
+
+| オプション | 全件登録に成功したZIP |
 |---|---|
 | どちらも指定しない | `output/uploaded_zip_data` へ移動 |
 | `--keep-zip-after-import` | 元のディレクトリに残す |
 | `--delete-zip-after-import` | 削除する |
 
-`--delete-zip-after-import` による削除は元に戻せません。`--keep-zip-after-import` と同時に指定しないでください。両方を指定した場合、現行実装では削除が優先されます。
+`--delete-zip-after-import` による削除は元に戻せません。`--keep-zip-after-import` と `--delete-zip-after-import` は同時に指定できず、両方を指定するとコマンドはエラーで終了します（`WekoImportConfig` で両方を有効にして `run_import` を呼んだ場合も、ZIPを処理する前に `ValueError` になります）。
 
-コンソールに `imported=<zip-path> result=<download-path>` が表示され、結果ファイルが保存されていることを確認してください。登録対象がない場合は `No zip files were found to import.` と表示して終了します。
+失敗行がある場合、件数が一致しない場合、または結果ファイルを解析できない場合は、上記のオプションにかかわらずZIPを削除せず、元のディレクトリにも残さずに `output/failed_zip_data`（`--failed-zip-dir` で変更可能）へ移動します。同名のファイルがある場合は連番を付けて移動します。このとき成功件数・失敗件数・期待件数と、失敗行（最大20行）の No.、Item ID、ステータス、インポート結果を表示し、`ImportResultError` で処理を中断します。この場合は再試行しません。一部のレコードがすでに登録されている可能性があるため、WEKO上の登録状況と結果ファイルを確認してから、必要なレコードだけを再投入してください。
+
+コンソールに `imported=<zip-path> result=<download-path>` が表示され、結果ファイルが保存されていることを確認してください。登録対象がない場合は `No zip files were found to import.` と表示して終了します。登録対象のZIPがあっても `--limit 0` を指定した場合は、`No zip files were imported because --limit 0 was given.` と表示して終了します。登録対象のZIPがすべて台帳によりスキップされた場合は、`No zip files were imported; <件数> zip file(s) were skipped because they are already in the import ledger.` と表示して終了します。
 
 ## 生成物の仕様
 
@@ -287,7 +325,7 @@ Item Typeのメタデータ項目ではない制御列は、次の方針で生�
 |---|---|---|
 | `#ID`, `URI` | 空欄 | WEKOインポート形式の固定値 |
 | `.IndexID[0]`, `.POS_INDEX[0]` | `indexes` / 選択したIndex名 | `Allow Multiple` |
-| `.PUBLISH_STATUS` | `public` | `Required` |
+| `.PUBLISH_STATUS` | `--publish-status` / 設定の `publish_status`（既定値 `public`） | `Required` |
 | `.FEEDBACK_MAIL[0]`, `.RESEAECHMAP_LINKAGE`, `.CNRI`, `.DOI_RA`, `.DOI` | 空欄 | WEKOインポート形式の固定値 |
 | `Keep/Upgrade Version` | `keep` | `Required` |
 | `PubDate` | `publish_date` | Item Type ZIPの `render.meta_fix.pubdate.option` から取得した属性 |

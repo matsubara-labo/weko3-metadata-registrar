@@ -6,6 +6,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+PUBLISH_STATUSES = ("public", "private")
+DEFAULT_PUBLISH_STATUS = "public"
+
 
 class RegistrationConfigError(ValueError):
     """Raised when metadata registration configuration is invalid."""
@@ -19,6 +22,7 @@ class RegistrationSettings:
     default_index: str
     publish_date: str
     default_languages: dict[str, str]
+    publish_status: str = DEFAULT_PUBLISH_STATUS
 
     def resolve_index(self, index_name: str | None = None) -> tuple[str, str]:
         selected_name = index_name or self.default_index
@@ -67,6 +71,14 @@ def _string_mapping(raw: dict[str, Any], key: str) -> dict[str, str]:
     return mapping
 
 
+def validate_publish_status(value: object) -> str:
+    if value not in PUBLISH_STATUSES:
+        raise RegistrationConfigError(
+            f"publish_status must be one of {', '.join(PUBLISH_STATUSES)}: {value!r}"
+        )
+    return value
+
+
 def load_registration_settings(config_path: Path) -> RegistrationSettings:
     if not config_path.exists():
         raise FileNotFoundError(f"Registration config was not found: {config_path}")
@@ -108,4 +120,7 @@ def load_registration_settings(config_path: Path) -> RegistrationSettings:
         default_index=default_index,
         publish_date=validate_publish_date(_required_string(raw, "publish_date")),
         default_languages=_string_mapping(raw, "default_languages"),
+        publish_status=validate_publish_status(
+            raw.get("publish_status", DEFAULT_PUBLISH_STATUS)
+        ),
     )

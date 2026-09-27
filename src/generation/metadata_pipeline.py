@@ -18,7 +18,11 @@ from .item_type import (
     format_weko_attributes,
     load_item_type_export,
 )
-from .registration_config import load_registration_settings, validate_publish_date
+from .registration_config import (
+    load_registration_settings,
+    validate_publish_date,
+    validate_publish_status,
+)
 
 DEFAULT_REGISTRATION_CONFIG_PATH = (
     Path(__file__).resolve().parents[2] / "config" / "metadata_registration.json"
@@ -29,7 +33,7 @@ class ControlValueSource(Enum):
     EMPTY = auto()
     INDEX_ID = auto()
     INDEX_NAME = auto()
-    PUBLIC = auto()
+    PUBLISH_STATUS = auto()
     KEEP = auto()
 
 
@@ -73,7 +77,7 @@ WEKO_IMPORT_CONTROL_COLUMNS = (
     ImportControlColumn(
         ".publish_status",
         ".PUBLISH_STATUS",
-        ControlValueSource.PUBLIC,
+        ControlValueSource.PUBLISH_STATUS,
         required=True,
     ),
     ImportControlColumn(
@@ -189,6 +193,7 @@ class MetadataGenerationConfig:
     output_dir: Path
     index_name: str | None = None
     publish_date: str | None = None
+    publish_status: str | None = None
     chunk_size: int | None = None
     zip_outputs: bool = False
     keep_tsv: bool = True
@@ -221,6 +226,11 @@ def _build_metadata_runtime(config: MetadataGenerationConfig) -> _MetadataRuntim
     publish_date = settings.publish_date
     if config.publish_date:
         publish_date = validate_publish_date(config.publish_date, "--publish-date")
+    publish_status = validate_publish_status(
+        settings.publish_status
+        if config.publish_status is None
+        else config.publish_status
+    )
 
     base_metadata_bindings = [column.binding for column in WEKO_IMPORT_CONTROL_COLUMNS]
     base_display_columns = [
@@ -228,7 +238,10 @@ def _build_metadata_runtime(config: MetadataGenerationConfig) -> _MetadataRuntim
     ]
     base_column_values = [
         resolve_control_value(
-            column.value_source, index_id=index_id, index_name=index_name
+            column.value_source,
+            index_id=index_id,
+            index_name=index_name,
+            publish_status=publish_status,
         )
         for column in WEKO_IMPORT_CONTROL_COLUMNS
     ]
@@ -302,14 +315,18 @@ def load_metadata_schema(config: MetadataGenerationConfig) -> MetadataSchema:
 
 
 def resolve_control_value(
-    source: ControlValueSource, *, index_id: str, index_name: str
+    source: ControlValueSource,
+    *,
+    index_id: str,
+    index_name: str,
+    publish_status: str,
 ) -> str:
     if source is ControlValueSource.INDEX_ID:
         return index_id
     if source is ControlValueSource.INDEX_NAME:
         return index_name
-    if source is ControlValueSource.PUBLIC:
-        return "public"
+    if source is ControlValueSource.PUBLISH_STATUS:
+        return publish_status
     if source is ControlValueSource.KEEP:
         return "keep"
     return ""

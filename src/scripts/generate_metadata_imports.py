@@ -18,7 +18,7 @@ from generation.metadata_pipeline import (
     generate_metadata_artifacts,
     summarize_artifacts,
 )
-from generation.registration_config import is_publish_date
+from generation.registration_config import PUBLISH_STATUSES, is_publish_date
 
 
 def publish_date_argument(value: str) -> str:
@@ -61,6 +61,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Publish date in YYYY-MM-DD format. If omitted, use registration config.",
     )
     parser.add_argument(
+        "--publish-status",
+        choices=PUBLISH_STATUSES,
+        help="Value for .PUBLISH_STATUS. If omitted, use registration config "
+        "(default: public).",
+    )
+    parser.add_argument(
         "--chunk-size",
         type=int,
         default=0,
@@ -99,6 +105,7 @@ def main() -> int:
         output_dir=args.output_dir,
         index_name=args.index_name,
         publish_date=args.publish_date,
+        publish_status=args.publish_status,
         chunk_size=args.chunk_size or None,
         zip_outputs=args.zip,
         keep_tsv=args.keep_tsv or not args.zip,
