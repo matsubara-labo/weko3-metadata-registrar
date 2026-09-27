@@ -68,7 +68,7 @@ class GenerateMetadataImportsCliTests(unittest.TestCase):
     def _run_with_invalid_rows(self, artifacts: list[object]):
         report_path = Path("out") / "invalid_rows.tsv"
 
-        def fake_generate(config, *, on_remove, on_invalid_rows):
+        def fake_generate(config, *, on_remove, on_invalid_rows, **kwargs):
             on_invalid_rows(report_path, 2)
             return artifacts
 

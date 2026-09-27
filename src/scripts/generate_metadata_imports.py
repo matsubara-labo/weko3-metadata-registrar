@@ -18,6 +18,15 @@ from generation.metadata_pipeline import (
     generate_metadata_artifacts,
     summarize_artifacts,
 )
+from generation.registration_config import is_publish_date
+
+
+def publish_date_argument(value: str) -> str:
+    if not is_publish_date(value):
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is not a valid YYYY-MM-DD date, e.g. 2025-05-27"
+        )
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -48,6 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--publish-date",
+        type=publish_date_argument,
         help="Publish date in YYYY-MM-DD format. If omitted, use registration config.",
     )
     parser.add_argument(
@@ -74,6 +84,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Generate from valid rows only and write invalid rows to invalid_rows.tsv in the output directory. Without it, generation stops if any row is invalid.",
     )
+    parser.add_argument(
+        "--strict-columns",
+        action="store_true",
+        help="Stop if the input has columns that are not ItemType fields. Without it, such columns are ignored with a warning.",
+    )
     return parser
 
 
@@ -91,6 +106,7 @@ def main() -> int:
         delimiter=args.delimiter,
         overwrite=args.overwrite,
         skip_invalid_rows=args.skip_invalid_rows,
+        strict_columns=args.strict_columns,
     )
     skipped: list[int] = []
 
@@ -102,6 +118,7 @@ def main() -> int:
         config,
         on_remove=lambda path: print(f"removed {path}"),
         on_invalid_rows=report_invalid_rows,
+        on_warning=lambda message: print(f"warning: {message}"),
     )
     if skipped and not artifacts:
         print("No valid rows were found; no import files were generated.")

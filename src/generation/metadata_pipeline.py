@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import ast
 import csv
+import difflib
 import os
 import re
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum, auto
 from pathlib import Path
 from typing import Any
@@ -16,7 +18,7 @@ from .item_type import (
     format_weko_attributes,
     load_item_type_export,
 )
-from .registration_config import load_registration_settings
+from .registration_config import load_registration_settings, validate_publish_date
 
 DEFAULT_REGISTRATION_CONFIG_PATH = (
     Path(__file__).resolve().parents[2] / "config" / "metadata_registration.json"
@@ -155,6 +157,7 @@ class MetadataGenerationConfig:
     delimiter: str = "auto"
     overwrite: bool = False
     skip_invalid_rows: bool = False
+    strict_columns: bool = False
 
 
 @dataclass(frozen=True)
@@ -176,7 +179,9 @@ def _build_metadata_runtime(config: MetadataGenerationConfig) -> _MetadataRuntim
     settings = load_registration_settings(config.registration_config_path)
     item_type = load_item_type_export(settings.item_type_export_path)
     index_id, index_name = settings.resolve_index(config.index_name)
-    publish_date = config.publish_date or settings.publish_date
+    publish_date = settings.publish_date
+    if config.publish_date:
+        publish_date = validate_publish_date(config.publish_date, "--publish-date")
 
     base_metadata_bindings = [column.binding for column in WEKO_IMPORT_CONTROL_COLUMNS]
     template_column_values = {
@@ -256,6 +261,29 @@ def process_date(date_str: str) -> str:
     return date_str.split("T", 1)[0]
 
 
+WEKO_DATE_FORMATS = ("%Y-%m-%d", "%Y-%m", "%Y")
+
+
+def is_weko_date(value: str) -> bool:
+    # Mirrors weko-search-ui utils.validation_date_property.
+    for fmt in WEKO_DATE_FORMATS:
+        try:
+            return value == datetime.strptime(value, fmt).strftime(fmt)
+        except ValueError:
+            pass
+    return False
+
+
+def normalize_date(field_name: str, value: str) -> str:
+    date = process_date(value).strip()
+    if not is_weko_date(date):
+        raise MetadataInputError(
+            f"{field_name!r} value {value!r} is not a WEKO date "
+            "(YYYY-MM-DD, YYYY-MM or YYYY)"
+        )
+    return date
+
+
 DELIMITERS = {"comma": ",", "tab": "\t"}
 
 
@@ -331,13 +359,13 @@ def normalize_row(
             raise MetadataInputError(f"Required metadata field {field_name!r} is empty")
         if isinstance(binding, str):
             if field_name in date_like_fields:
-                values = [process_date(value) for value in values]
+                values = [normalize_date(field_name, value) for value in values]
             normalized[field_name] = values
             continue
 
         value = values[0] if values else ""
         if field_name in date_like_fields and value:
-            value = process_date(value)
+            value = normalize_date(field_name, value)
         normalized[field_name] = value
 
     for field_name, value in normalized.items():
@@ -378,6 +406,51 @@ def validate_header_matches_schema(
     )
 
 
+def _suggest_field(name: str, field_names: list[str]) -> str | None:
+    folded = {field_name.casefold(): field_name for field_name in field_names}
+    key = name.strip().casefold()
+    if key in folded:
+        return folded[key]
+    matches = difflib.get_close_matches(key, list(folded), n=1)
+    return folded[matches[0]] if matches else None
+
+
+def check_columns(
+    input_path: Path,
+    fieldnames: list[str],
+    schema: MetadataSchema,
+    *,
+    strict: bool = False,
+) -> list[str]:
+    field_names = list(schema.column_bindings)
+    present = set(fieldnames)
+    # Suggest only fields the header lacks; a present field is not a typo target.
+    candidates = [name for name in field_names if name not in present]
+    unknown: list[str] = []
+    for name in fieldnames:
+        if (
+            name in schema.column_bindings
+            or name in INVALID_ROWS_REPORT_COLUMNS
+            or not name.strip()  # unnamed, e.g. a pandas index column
+        ):
+            continue
+        suggestion = _suggest_field(name, candidates)
+        hint = f" (did you mean {suggestion!r}?)" if suggestion else ""
+        unknown.append(f"{name!r}{hint}")
+    if unknown and strict:
+        raise MetadataInputError(
+            f"{input_path}:1: unknown column(s) not in the ItemType: "
+            f"{', '.join(unknown)}"
+        )
+    warnings = [f"unknown column {column} will be ignored" for column in unknown]
+    for field_name in field_names:
+        if field_name not in present:
+            required = "Required" in schema.field_attributes[field_name]
+            suffix = " (Required)" if required else ""
+            warnings.append(f"missing column {field_name!r}{suffix}")
+    return [f"{input_path}:1: {warning}" for warning in warnings]
+
+
 def format_row_errors(input_path: Path, errors: list[RowError]) -> str:
     lines = [
         f"{input_path}:{error.row_number}: {error.message}"
@@ -394,9 +467,17 @@ def load_rows(
     schema: MetadataSchema,
     date_like_fields: frozenset[str] = frozenset(),
     delimiter: str | None = None,
+    *,
+    strict_columns: bool = False,
+    on_warning: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]]:
     rows, errors = load_rows_with_errors(
-        input_path, schema, date_like_fields, delimiter
+        input_path,
+        schema,
+        date_like_fields,
+        delimiter,
+        strict_columns=strict_columns,
+        on_warning=on_warning,
     )
     if errors:
         raise MetadataInputError(format_row_errors(input_path, errors))
@@ -408,6 +489,9 @@ def load_rows_with_errors(
     schema: MetadataSchema,
     date_like_fields: frozenset[str] = frozenset(),
     delimiter: str | None = None,
+    *,
+    strict_columns: bool = False,
+    on_warning: Callable[[str], None] | None = None,
 ) -> tuple[list[dict[str, Any]], list[RowError]]:
     if not input_path.exists():
         raise FileNotFoundError(f"Input file was not found: {input_path}")
@@ -424,6 +508,15 @@ def load_rows_with_errors(
                     validate_header_matches_schema(
                         input_path, list(reader.fieldnames), schema, delimiter
                     )
+                    warnings = check_columns(
+                        input_path,
+                        list(reader.fieldnames),
+                        schema,
+                        strict=strict_columns,
+                    )
+                    if on_warning is not None:
+                        for warning in warnings:
+                            on_warning(warning)
                 fieldnames = list(reader.fieldnames or [])
                 rows: list[dict[str, Any]] = []
                 errors: list[RowError] = []
@@ -617,6 +710,7 @@ def generate_metadata_artifacts(
     *,
     on_remove: Callable[[Path], None] | None = None,
     on_invalid_rows: Callable[[Path, int], None] | None = None,
+    on_warning: Callable[[str], None] | None = None,
 ) -> list[GeneratedArtifact]:
     existing = find_generated_artifacts(config.output_dir)
     if existing and not config.overwrite:
@@ -631,6 +725,8 @@ def generate_metadata_artifacts(
         schema,
         runtime.date_like_fields,
         resolve_delimiter(config.delimiter),
+        strict_columns=config.strict_columns,
+        on_warning=on_warning,
     )
     if errors and not config.skip_invalid_rows:
         raise MetadataInputError(format_row_errors(config.input_path, errors))

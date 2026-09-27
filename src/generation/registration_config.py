@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,22 @@ def _required_string(raw: dict[str, Any], key: str) -> str:
     value = raw.get(key)
     if not isinstance(value, str) or not value:
         raise RegistrationConfigError(f"{key} must be a non-empty string")
+    return value
+
+
+def is_publish_date(value: str) -> bool:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").strftime("%Y-%m-%d") == value
+    except ValueError:
+        return False
+
+
+def validate_publish_date(value: str, source: str = "publish_date") -> str:
+    if not is_publish_date(value):
+        raise RegistrationConfigError(
+            f"{source} {value!r} is not a valid date; WEKO requires PubDate "
+            "as YYYY-MM-DD, e.g. 2025-05-27"
+        )
     return value
 
 
@@ -89,6 +106,6 @@ def load_registration_settings(config_path: Path) -> RegistrationSettings:
         item_type_export_path=export_path,
         indexes=indexes,
         default_index=default_index,
-        publish_date=_required_string(raw, "publish_date"),
+        publish_date=validate_publish_date(_required_string(raw, "publish_date")),
         default_languages=_string_mapping(raw, "default_languages"),
     )
