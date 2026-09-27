@@ -85,6 +85,22 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
         with self.assertRaisesRegex(MetadataInputError, "RequiredField.*empty"):
             normalize_row({}, schema)
 
+    def test_non_string_list_element_error_names_column(self) -> None:
+        schema = MetadataSchema(
+            item_type_name="Test(1)",
+            item_schema_url="https://weko.example.org/items/jsonschema/1",
+            base_metadata_bindings=[],
+            template_column_values={},
+            template_column_attributes={},
+            column_bindings={"Version": ".metadata.item_version[{index}].interim"},
+            default_languages={},
+            field_attributes={"Version": "Allow Multiple"},
+            display_columns={"Version": "Version[{index}].None"},
+        )
+
+        with self.assertRaisesRegex(MetadataInputError, "'Version'.*float"):
+            normalize_row({"Version": "[1.50]"}, schema)
+
     def test_generation_uses_config_and_exported_item_type(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

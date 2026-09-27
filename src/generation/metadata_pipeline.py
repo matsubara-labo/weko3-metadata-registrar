@@ -235,16 +235,28 @@ def parse_literal_list(raw_value: Any) -> list[str]:
     if not text:
         return []
 
-    try:
-        parsed = ast.literal_eval(text)
-    except (SyntaxError, ValueError):
+    if not (text.startswith("[") and text.endswith("]")):
         return [text]
 
-    if isinstance(parsed, list):
-        return ["" if value is None else str(value) for value in parsed]
-    if parsed in (None, ""):
-        return []
-    return [str(parsed)]
+    try:
+        parsed = ast.literal_eval(text)
+    except (SyntaxError, ValueError, TypeError, MemoryError, RecursionError):
+        return [text]
+    if not isinstance(parsed, list):
+        return [text]
+
+    values: list[str] = []
+    for value in parsed:
+        if value is None:
+            values.append("")
+        elif isinstance(value, str):
+            values.append(value)
+        else:
+            raise MetadataInputError(
+                f"List element {value!r} is of type {type(value).__name__}; "
+                "quote each list element as a string, e.g. \"['1.50']\""
+            )
+    return values
 
 
 def normalize_row(
@@ -254,7 +266,10 @@ def normalize_row(
 ) -> dict[str, str | list[str]]:
     normalized: dict[str, str | list[str]] = {}
     for field_name, binding in schema.column_bindings.items():
-        values = parse_literal_list(source_row.get(field_name, ""))
+        try:
+            values = parse_literal_list(source_row.get(field_name, ""))
+        except MetadataInputError as exc:
+            raise MetadataInputError(f"{field_name!r}: {exc}") from exc
         if "Required" in schema.field_attributes[field_name] and not values:
             raise MetadataInputError(f"Required metadata field {field_name!r} is empty")
         if isinstance(binding, str):
