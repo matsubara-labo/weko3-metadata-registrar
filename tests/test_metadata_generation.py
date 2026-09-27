@@ -39,8 +39,9 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
         self.assertIsInstance(schema.item_type_name, str)
         self.assertIsInstance(schema.item_schema_url, str)
         self.assertIsInstance(schema.base_metadata_bindings, list)
-        self.assertIsInstance(schema.template_column_values, dict)
-        self.assertIsInstance(schema.template_column_attributes, dict)
+        self.assertIsInstance(schema.base_display_columns, list)
+        self.assertIsInstance(schema.base_column_values, list)
+        self.assertIsInstance(schema.base_column_attributes, list)
         self.assertIsInstance(schema.column_bindings, dict)
         self.assertIsInstance(schema.default_languages, dict)
         self.assertIsInstance(schema.field_attributes, dict)
@@ -67,20 +68,59 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
                 ".subitem_alternative_title_language",
             ],
         )
-        self.assertTrue(
-            all(isinstance(value, str) for value in schema.base_metadata_bindings)
+        self.assertEqual(
+            schema.base_metadata_bindings,
+            [
+                "#.id",
+                ".uri",
+                ".metadata.path[0]",
+                ".pos_index[0]",
+                ".publish_status",
+                ".feedback_mail[0]",
+                ".researchmap_linkage",
+                ".cnri",
+                ".doi_ra",
+                ".doi",
+                ".edit_mode",
+                ".metadata.pubdate",
+            ],
+        )
+        self.assertEqual(
+            schema.base_display_columns,
+            [
+                "#ID",
+                "URI",
+                ".IndexID[0]",
+                ".POS_INDEX[0]",
+                ".PUBLISH_STATUS",
+                ".FEEDBACK_MAIL[0]",
+                ".RESEAECHMAP_LINKAGE",
+                ".CNRI",
+                ".DOI_RA",
+                ".DOI",
+                "Keep/Upgrade Version",
+                "PubDate",
+            ],
+        )
+        self.assertEqual(
+            schema.base_column_attributes,
+            [
+                "#",
+                "",
+                "Allow Multiple",
+                "Allow Multiple",
+                "Required",
+                "Allow Multiple",
+                "",
+                "",
+                "",
+                "",
+                "Required",
+                "Hide, Required",
+            ],
         )
         self.assertTrue(
-            all(
-                isinstance(value, str)
-                for value in schema.template_column_values.values()
-            )
-        )
-        self.assertTrue(
-            all(
-                isinstance(value, str)
-                for value in schema.template_column_attributes.values()
-            )
+            all(isinstance(value, str) for value in schema.base_column_values)
         )
         self.assertTrue(
             all(isinstance(value, str) for value in schema.field_attributes.values())
@@ -95,8 +135,9 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
             item_type_name="Test(1)",
             item_schema_url="https://weko.example.org/items/jsonschema/1",
             base_metadata_bindings=[],
-            template_column_values={},
-            template_column_attributes={},
+            base_display_columns=[],
+            base_column_values=[],
+            base_column_attributes=[],
             column_bindings={
                 "RequiredField": [".metadata.item_required[{index}].interim"]
             },
@@ -118,8 +159,9 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
             item_type_name="Test(1)",
             item_schema_url="https://weko.example.org/items/jsonschema/1",
             base_metadata_bindings=[],
-            template_column_values={},
-            template_column_attributes={},
+            base_display_columns=[],
+            base_column_values=[],
+            base_column_attributes=[],
             column_bindings={field_name: [binding]},
             default_languages={},
             field_attributes={field_name: attribute},
@@ -192,8 +234,9 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
             item_type_name="Test(1)",
             item_schema_url="https://weko.example.org/items/jsonschema/1",
             base_metadata_bindings=[],
-            template_column_values={},
-            template_column_attributes={},
+            base_display_columns=[],
+            base_column_values=[],
+            base_column_attributes=[],
             column_bindings={"Version": [".metadata.item_version[{index}].interim"]},
             default_languages={},
             field_attributes={"Version": "Allow Multiple"},
@@ -209,8 +252,9 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
             item_type_name="Test(1)",
             item_schema_url="https://weko.example.org/items/jsonschema/1",
             base_metadata_bindings=[],
-            template_column_values={},
-            template_column_attributes={},
+            base_display_columns=[],
+            base_column_values=[],
+            base_column_attributes=[],
             column_bindings={"Title": [".metadata.item_title[{index}].interim"]},
             default_languages={},
             field_attributes={"Title": "Allow Multiple"},

@@ -33,8 +33,9 @@ def _schema() -> MetadataSchema:
         item_type_name="Test(1)",
         item_schema_url="https://weko.example.org/items/jsonschema/1",
         base_metadata_bindings=[],
-        template_column_values={},
-        template_column_attributes={},
+        base_display_columns=[],
+        base_column_values=[],
+        base_column_attributes=[],
         column_bindings={
             "Title": [".metadata.item_title"],
             "Issued": [".metadata.item_issued"],

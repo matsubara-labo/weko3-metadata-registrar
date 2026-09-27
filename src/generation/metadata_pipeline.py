@@ -133,9 +133,11 @@ class OutputExistsError(FileExistsError):
 class MetadataSchema:
     item_type_name: str
     item_schema_url: str
+    # Control and fixed columns, one entry per output column in each list.
     base_metadata_bindings: list[str]
-    template_column_values: dict[str, str]
-    template_column_attributes: dict[str, str]
+    base_display_columns: list[str]
+    base_column_values: list[str]
+    base_column_attributes: list[str]
     # Templates of repeatable fields contain "{index}" and expand per value.
     column_bindings: dict[str, list[str]]
     default_languages: dict[str, str]
@@ -145,6 +147,22 @@ class MetadataSchema:
     # Non-hidden fields mapped to JPCOAR title; WEKO ignores hidden ones.
     title_fields: frozenset[str] = frozenset()
     hidden_title_fields: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        lengths = {
+            len(self.base_metadata_bindings),
+            len(self.base_display_columns),
+            len(self.base_column_values),
+            len(self.base_column_attributes),
+        }
+        if len(lengths) != 1:
+            raise ValueError(
+                "Base columns have mismatched lengths: "
+                f"{len(self.base_metadata_bindings)} bindings, "
+                f"{len(self.base_display_columns)} display columns, "
+                f"{len(self.base_column_values)} values, "
+                f"{len(self.base_column_attributes)} attributes"
+            )
 
     @property
     def language_fields(self) -> list[str]:
@@ -205,21 +223,30 @@ def _build_metadata_runtime(config: MetadataGenerationConfig) -> _MetadataRuntim
         publish_date = validate_publish_date(config.publish_date, "--publish-date")
 
     base_metadata_bindings = [column.binding for column in WEKO_IMPORT_CONTROL_COLUMNS]
-    template_column_values = {
-        column.display_name: resolve_control_value(
+    base_display_columns = [
+        column.display_name for column in WEKO_IMPORT_CONTROL_COLUMNS
+    ]
+    base_column_values = [
+        resolve_control_value(
             column.value_source, index_id=index_id, index_name=index_name
         )
         for column in WEKO_IMPORT_CONTROL_COLUMNS
-    }
-    template_column_attributes = {
-        column.display_name: column.attribute for column in WEKO_IMPORT_CONTROL_COLUMNS
-    }
+    ]
+    base_column_attributes = [
+        column.attribute for column in WEKO_IMPORT_CONTROL_COLUMNS
+    ]
+    # Fixed fields are never expanded, so an array item is always index 0.
     for field in item_type.fixed_fields:
-        base_metadata_bindings.extend(field.binding_templates)
-        template_column_values[field.name] = resolve_fixed_field_value(
-            field, publish_date=publish_date
+        base_metadata_bindings.extend(
+            template.format(index=0) for template in field.binding_templates
         )
-        template_column_attributes[field.name] = field.attribute
+        base_display_columns.extend(
+            template.format(index=0) for template in field.display_templates
+        )
+        base_column_values.extend(
+            resolve_fixed_field_values(field, publish_date=publish_date)
+        )
+        base_column_attributes.extend([field.attribute] * len(field.binding_templates))
 
     column_bindings = {
         field.name: list(field.binding_templates) for field in item_type.fields
@@ -241,8 +268,9 @@ def _build_metadata_runtime(config: MetadataGenerationConfig) -> _MetadataRuntim
         item_type_name=item_type.display_name,
         item_schema_url=f"{settings.weko_base_url}/items/jsonschema/{item_type.id}",
         base_metadata_bindings=base_metadata_bindings,
-        template_column_values=template_column_values,
-        template_column_attributes=template_column_attributes,
+        base_display_columns=base_display_columns,
+        base_column_values=base_column_values,
+        base_column_attributes=base_column_attributes,
         column_bindings=column_bindings,
         default_languages=dict(settings.default_languages),
         field_attributes={field.name: field.attribute for field in item_type.fields},
@@ -287,14 +315,15 @@ def resolve_control_value(
     return ""
 
 
-def resolve_fixed_field_value(field: ItemTypeField, *, publish_date: str) -> str:
+def resolve_fixed_field_values(field: ItemTypeField, *, publish_date: str) -> list[str]:
+    """Return one value per binding of a fixed field."""
     if field.key == "pubdate":
-        return publish_date
+        return ["" if value.language else publish_date for value in field.values]
     if field.required:
         raise MetadataInputError(
             f"Required fixed ItemType field {field.name!r} has no configured value"
         )
-    return ""
+    return [""] * len(field.values)
 
 
 def process_date(date_str: str) -> str:
@@ -710,8 +739,8 @@ def build_dynamic_columns(
     max_lengths: dict[str, int],
 ) -> tuple[list[str], list[str], list[str]]:
     metadata_bindings = list(schema.base_metadata_bindings)
-    display_columns = list(schema.template_column_values)
-    attribute_row = list(schema.template_column_attributes.values())
+    display_columns = list(schema.base_display_columns)
+    attribute_row = list(schema.base_column_attributes)
 
     for field_name, bindings in schema.column_bindings.items():
         displays = schema.display_columns[field_name]
@@ -740,7 +769,7 @@ def build_value_row(
     max_lengths: dict[str, int],
     schema: MetadataSchema,
 ) -> list[str]:
-    values = list(schema.template_column_values.values())
+    values = list(schema.base_column_values)
 
     for field_name, bindings in schema.column_bindings.items():
         field_value = row[field_name]
