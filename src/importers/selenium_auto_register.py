@@ -53,6 +53,8 @@ WEKO_FATAL_MESSAGE_KEYWORDS = (
     "the tsv file could not be read",
 )
 POLL_INTERVAL_SECONDS = 2
+RESULT_FILE_PREFIX = "List_Download_"
+PARTIAL_DOWNLOAD_SUFFIXES = (".crdownload", ".tmp", ".part")
 MAX_IMPORT_ATTEMPTS = 4
 DRIVER_RETRY_DELAY_SECONDS = 4
 
@@ -321,22 +323,32 @@ def prepare_file_input(driver: WebDriver, file_input: WebElement) -> WebElement:
 
 
 def wait_for_download(
-    download_dir: Path, previous_files: set[str], timeout_ms: int
+    download_dir: Path,
+    previous_files: set[str],
+    timeout_ms: int,
+    expected_prefix: str = RESULT_FILE_PREFIX,
 ) -> Path:
     deadline = time.time() + timeout_ms / 1000
+    ignored: set[str] = set()
     while time.time() < deadline:
         current_files = {path.name for path in download_dir.iterdir() if path.is_file()}
         new_files = sorted(current_files - previous_files)
         completed = [
-            name
-            for name in new_files
-            if not name.endswith((".crdownload", ".tmp", ".part"))
+            name for name in new_files if not name.endswith(PARTIAL_DOWNLOAD_SUFFIXES)
         ]
-        if completed:
-            return download_dir / completed[0]
+        for name in completed:
+            if name.startswith(expected_prefix):
+                return download_dir / name
+            if name not in ignored:
+                ignored.add(name)
+                print(
+                    f"Ignoring unexpected download {name!r} "
+                    f"(expected prefix {expected_prefix!r})"
+                )
         time.sleep(POLL_INTERVAL_SECONDS)
     raise TimeoutException(
-        f"Timed out waiting for a completed download in {download_dir}"
+        f"Timed out waiting for a completed download starting with "
+        f"{expected_prefix!r} in {download_dir}"
     )
 
 
