@@ -12,6 +12,7 @@ from generation.metadata_pipeline import (
     MetadataSchema,
     generate_metadata_artifacts,
     load_metadata_schema,
+    load_rows,
     normalize_row,
 )
 
@@ -100,6 +101,55 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
 
         with self.assertRaisesRegex(MetadataInputError, "'Version'.*float"):
             normalize_row({"Version": "[1.50]"}, schema)
+
+    def _title_schema(self) -> MetadataSchema:
+        return MetadataSchema(
+            item_type_name="Test(1)",
+            item_schema_url="https://weko.example.org/items/jsonschema/1",
+            base_metadata_bindings=[],
+            template_column_values={},
+            template_column_attributes={},
+            column_bindings={"Title": ".metadata.item_title[{index}].interim"},
+            default_languages={},
+            field_attributes={"Title": "Allow Multiple"},
+            display_columns={"Title": "Title[{index}].None"},
+        )
+
+    def _load_text(self, file_name: str, text: str) -> list[dict[str, object]]:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            input_path = Path(temporary_directory) / file_name
+            input_path.write_text(text, encoding="utf-8")
+            return load_rows(input_path, self._title_schema())
+
+    def test_duplicate_column_name_is_rejected_with_positions(self) -> None:
+        with self.assertRaisesRegex(
+            MetadataInputError,
+            r":1: duplicate column name\(s\): 'Title' \(columns 2, 5\)$",
+        ):
+            self._load_text("input.csv", "id,Title,a,b,Title\n1,first,x,y,second\n")
+
+    def test_all_duplicate_column_names_are_listed_in_order(self) -> None:
+        with self.assertRaisesRegex(
+            MetadataInputError,
+            r"'Title' \(columns 1, 3\), 'Creator' \(columns 2, 4, 5\)$",
+        ):
+            self._load_text(
+                "input.tsv",
+                "Title\tCreator\tTitle\tCreator\tCreator\na\tb\tc\td\te\n",
+            )
+
+    def test_repeated_empty_column_names_are_rejected(self) -> None:
+        with self.assertRaisesRegex(MetadataInputError, r"'' \(columns 3, 4\)$"):
+            self._load_text("input.csv", "Title,x,,\na,b,c,d\n")
+
+    def test_unique_header_loads_rows(self) -> None:
+        rows = self._load_text("input.csv", "id,Title\n1,first\n")
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["Title"], ["first"])
+
+    def test_empty_file_returns_no_rows(self) -> None:
+        self.assertEqual(self._load_text("input.csv", ""), [])
 
     def test_generation_uses_config_and_exported_item_type(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

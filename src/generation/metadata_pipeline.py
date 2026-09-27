@@ -285,6 +285,21 @@ def normalize_row(
     return normalized
 
 
+def validate_unique_columns(input_path: Path, fieldnames: list[str]) -> None:
+    positions: dict[str, list[int]] = {}
+    for column_number, name in enumerate(fieldnames, start=1):
+        positions.setdefault(name, []).append(column_number)
+    duplicates = [
+        f"{name!r} (columns {', '.join(str(number) for number in numbers)})"
+        for name, numbers in positions.items()
+        if len(numbers) > 1
+    ]
+    if duplicates:
+        raise MetadataInputError(
+            f"{input_path}:1: duplicate column name(s): {', '.join(duplicates)}"
+        )
+
+
 def load_rows(
     input_path: Path,
     schema: MetadataSchema,
@@ -296,6 +311,8 @@ def load_rows(
     delimiter = detect_delimiter(input_path)
     with input_path.open("r", encoding="utf-8-sig", newline="") as file_obj:
         reader = csv.DictReader(file_obj, delimiter=delimiter)
+        if reader.fieldnames is not None:
+            validate_unique_columns(input_path, list(reader.fieldnames))
         rows: list[dict[str, Any]] = []
         for row_number, row in enumerate(reader, start=2):
             try:

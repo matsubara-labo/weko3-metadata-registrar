@@ -113,7 +113,7 @@ WEKO_PASSWORD=<login-password>
 
 ### 入力CSV/TSV
 
-入力ファイルの列名は、Item Type ZIP内のメタデータ項目名と一致させます。次の例は、同梱されているサンプルItem Typeに対応するもので、すべてのItem Typeに共通する列名ではありません。
+入力ファイルの列名は、Item Type ZIP内のメタデータ項目名と一致させます。列名は重複させないでください。同じ列名が複数あるとエラーになります。複数の値は、同名の列を並べずに1つのセルへリストとして記述します。次の例は、同梱されているサンプルItem Typeに対応するもので、すべてのItem Typeに共通する列名ではありません。
 
 ```csv
 corpusid,Title,Title_g,Creator,PublicationYear_g
