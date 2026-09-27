@@ -206,12 +206,13 @@ uv run python src/scripts/selenium_auto_register.py --headless
 | `--zip-dir PATH` | `output/zip_data` | 登録対象ZIPのディレクトリ |
 | `--download-dir PATH` | `output/import_results` | WEKOから取得するインポート結果の保存先 |
 | `--processed-zip-dir PATH` | `output/uploaded_zip_data` | 登録済みZIPの移動先 |
+| `--failed-zip-dir PATH` | `output/failed_zip_data` | インポート結果に失敗が含まれるZIPの移動先 |
 | `--headless` | 無効 | Chromeを画面に表示せず実行する |
 | `--limit N` | 制限なし | ファイル名順の先頭N件だけ登録する |
-| `--keep-zip-after-import` | 無効 | 登録済みZIPを元の場所に残す |
-| `--delete-zip-after-import` | 無効 | 登録成功後のZIPを削除する |
+| `--keep-zip-after-import` | 無効 | 全件登録に成功したZIPを元の場所に残す |
+| `--delete-zip-after-import` | 無効 | 全件登録に成功したZIPを削除する |
 
-`--zip-dir`、`--download-dir`、`--processed-zip-dir` の既定値は、`--base-dir` を基準に解決されます。明示的に指定したパスは、実行時のカレントディレクトリを基準に解決されます。
+`--zip-dir`、`--download-dir`、`--processed-zip-dir`、`--failed-zip-dir` の既定値は、`--base-dir` を基準に解決されます。明示的に指定したパスは、実行時のカレントディレクトリを基準に解決されます。
 
 ### タイムアウト引数
 
@@ -231,15 +232,23 @@ WEKO画面にエラー表示（インポート実行中、Celery停止、サー�
 
 ### 登録後のファイル
 
-登録に成功すると、WEKOからダウンロードした結果ファイルを `output/import_results` に保存します。登録対象ZIPは、指定したオプションに応じて次のように処理します。
+インポートが完了すると、WEKOのResultタブからダウンロードした結果ファイル（TSV、またはWEKOの設定によりCSV）を `output/import_results` に保存し、その内容を検証します。次の条件をすべて満たす場合だけ、ZIPの登録に成功したとみなします。
 
-| オプション | 登録成功後のZIP |
+- 結果ファイルに1行以上のレコードがある
+- 結果ファイルのレコード数が、ZIP内のTSVに含まれるデータ行数（先頭セルが `#` で始まらない行）と一致する
+- すべての行のステータスが `Done`（`完了`）、インポート結果が `Success`（`成功`）である
+
+全件成功したZIPは、指定したオプションに応じて次のように処理し、`result: success=<成功件数>/<件数>` を表示します。
+
+| オプション | 全件登録に成功したZIP |
 |---|---|
 | どちらも指定しない | `output/uploaded_zip_data` へ移動 |
 | `--keep-zip-after-import` | 元のディレクトリに残す |
 | `--delete-zip-after-import` | 削除する |
 
 `--delete-zip-after-import` による削除は元に戻せません。`--keep-zip-after-import` と同時に指定しないでください。両方を指定した場合、現行実装では削除が優先されます。
+
+失敗行がある場合、件数が一致しない場合、または結果ファイルを解析できない場合は、上記のオプションにかかわらずZIPを削除せず、元のディレクトリにも残さずに `output/failed_zip_data`（`--failed-zip-dir` で変更可能）へ移動します。同名のファイルがある場合は連番を付けて移動します。このとき成功件数・失敗件数・期待件数と、失敗行（最大20行）の No.、Item ID、ステータス、インポート結果を表示し、`ImportResultError` で処理を中断します。この場合は再試行しません。一部のレコードがすでに登録されている可能性があるため、WEKO上の登録状況と結果ファイルを確認してから、必要なレコードだけを再投入してください。
 
 コンソールに `imported=<zip-path> result=<download-path>` が表示され、結果ファイルが保存されていることを確認してください。登録対象がない場合は `No zip files were found to import.` と表示して終了します。
 

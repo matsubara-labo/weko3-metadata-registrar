@@ -37,6 +37,11 @@ from selenium.webdriver.support import expected_conditions as EC
 from urllib3.exceptions import ProtocolError
 
 from generation.registration_config import load_registration_settings
+from importers.import_result import (
+    ImportResultError,
+    ImportResultSummary,
+    summarize_import_result,
+)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REGISTRATION_CONFIG_PATH = (
@@ -115,6 +120,7 @@ class WekoImportConfig:
     delete_zip_after_import: bool = False
     keep_zip_after_import: bool = False
     processed_zip_dir: Path | None = None
+    failed_zip_dir: Path | None = None
     selector_config_path: Path | None = DEFAULT_SELECTOR_CONFIG_PATH
     selectors: WekoSelectors | None = None
 
@@ -139,6 +145,9 @@ class WekoImportConfig:
 
     def resolved_processed_zip_dir(self) -> Path:
         return self.processed_zip_dir or self.base_dir / "output" / "uploaded_zip_data"
+
+    def resolved_failed_zip_dir(self) -> Path:
+        return self.failed_zip_dir or self.base_dir / "output" / "failed_zip_data"
 
 
 def load_selector_config(selector_config_path: Path) -> WekoSelectors:
@@ -587,6 +596,23 @@ def finalize_imported_zip(zip_path: Path, config: WekoImportConfig) -> Path | No
     return destination
 
 
+def move_failed_zip(zip_path: Path, config: WekoImportConfig) -> Path:
+    failed_dir = config.resolved_failed_zip_dir()
+    failed_dir.mkdir(parents=True, exist_ok=True)
+    destination = unique_destination_path(failed_dir, zip_path.name)
+    shutil.move(str(zip_path), str(destination))
+    return destination
+
+
+def verify_import_result(
+    zip_path: Path, downloaded_file: Path
+) -> tuple[ImportResultSummary | None, str | None]:
+    try:
+        return summarize_import_result(downloaded_file, zip_path), None
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+
 def describe_driver_state(driver: WebDriver) -> str:
     details: list[str] = []
     details.append(f"session_id={getattr(driver, 'session_id', None)!r}")
@@ -801,19 +827,13 @@ def run_import(config: WekoImportConfig) -> list[tuple[Path, Path]]:
     for index, zip_path in enumerate(zip_files, start=1):
         print(f"[{index}/{total}] importing {zip_path}")
         last_error: Exception | None = None
+        downloaded_file: Path | None = None
         for attempt in range(1, MAX_IMPORT_ATTEMPTS + 1):
             driver: WebDriver | None = None
             try:
                 driver = create_driver(config, download_dir)
                 login(driver, config)
                 downloaded_file = import_one_zip(driver, zip_path, download_dir, config)
-                results.append((zip_path, downloaded_file))
-                finalized_zip_path = finalize_imported_zip(zip_path, config)
-                print(f"[{index}/{total}] imported={zip_path} result={downloaded_file}")
-                if finalized_zip_path is None:
-                    print(f"[{index}/{total}] deleted={zip_path}")
-                elif finalized_zip_path != zip_path:
-                    print(f"[{index}/{total}] moved={zip_path} -> {finalized_zip_path}")
                 break
             except Exception as exc:
                 last_error = exc
@@ -834,6 +854,38 @@ def run_import(config: WekoImportConfig) -> list[tuple[Path, Path]]:
         else:
             if last_error is not None:
                 raise last_error
+        if downloaded_file is None:
+            raise RuntimeError(f"Import did not produce a result file for {zip_path}")
+
+        summary, parse_error = verify_import_result(zip_path, downloaded_file)
+        if summary is None or not summary.succeeded:
+            failed_zip_path = move_failed_zip(zip_path, config)
+            print(
+                f"[{index}/{total}] import result check failed for {zip_path} "
+                f"result={downloaded_file}"
+            )
+            if parse_error is not None:
+                print(f"[{index}/{total}] result: unparsable ({parse_error})")
+            if summary is not None:
+                for line in summary.describe():
+                    print(f"[{index}/{total}] result: {line}")
+            print(f"[{index}/{total}] moved={zip_path} -> {failed_zip_path}")
+            raise ImportResultError(
+                f"WEKO import result for {zip_path} was not fully successful; "
+                f"zip moved to {failed_zip_path}; result={downloaded_file}"
+            )
+
+        results.append((zip_path, downloaded_file))
+        finalized_zip_path = finalize_imported_zip(zip_path, config)
+        print(f"[{index}/{total}] imported={zip_path} result={downloaded_file}")
+        print(
+            f"[{index}/{total}] result: "
+            f"success={summary.success_count}/{len(summary.rows)}"
+        )
+        if finalized_zip_path is None:
+            print(f"[{index}/{total}] deleted={zip_path}")
+        elif finalized_zip_path != zip_path:
+            print(f"[{index}/{total}] moved={zip_path} -> {finalized_zip_path}")
 
     return results
 
@@ -868,6 +920,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--delete-zip-after-import", action="store_true")
     parser.add_argument("--keep-zip-after-import", action="store_true")
     parser.add_argument("--processed-zip-dir", type=Path)
+    parser.add_argument(
+        "--failed-zip-dir",
+        type=Path,
+        help="Destination for zip files whose import result was not fully successful.",
+    )
     return parser
 
 
@@ -890,6 +947,7 @@ def main() -> int:
         delete_zip_after_import=args.delete_zip_after_import,
         keep_zip_after_import=args.keep_zip_after_import,
         processed_zip_dir=args.processed_zip_dir,
+        failed_zip_dir=args.failed_zip_dir,
     )
 
     results = run_import(config)
