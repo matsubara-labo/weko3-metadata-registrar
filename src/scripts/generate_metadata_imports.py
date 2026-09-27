@@ -27,6 +27,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--input", type=Path, required=True, help="Source CSV or TSV file."
     )
     parser.add_argument(
+        "--delimiter",
+        choices=("auto", "comma", "tab"),
+        default="auto",
+        help="Input delimiter. auto uses .tsv/.csv extensions, otherwise compares tabs and commas in the header line.",
+    )
+    parser.add_argument(
         "--output-dir", type=Path, required=True, help="Directory for generated files."
     )
     parser.add_argument(
@@ -71,6 +77,7 @@ def main() -> int:
         zip_outputs=args.zip,
         keep_tsv=args.keep_tsv or not args.zip,
         registration_config_path=args.registration_config,
+        delimiter=args.delimiter,
     )
     artifacts = generate_metadata_artifacts(config)
     print(summarize_artifacts(artifacts))

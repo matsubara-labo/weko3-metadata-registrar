@@ -118,11 +118,56 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
             display_columns={"Title": "Title[{index}].None"},
         )
 
-    def _load_text(self, file_name: str, text: str) -> list[dict[str, object]]:
+    def _load_text(
+        self, file_name: str, text: str, delimiter: str | None = None
+    ) -> list[dict[str, object]]:
         with tempfile.TemporaryDirectory() as temporary_directory:
             input_path = Path(temporary_directory) / file_name
             input_path.write_text(text, encoding="utf-8")
-            return load_rows(input_path, self._title_schema())
+            return load_rows(input_path, self._title_schema(), delimiter=delimiter)
+
+    def test_txt_with_tabs_is_detected_as_tab(self) -> None:
+        rows = self._load_text("input.txt", "id\tTitle\n1\tfirst\n2\tsecond\n")
+
+        self.assertEqual([row["Title"] for row in rows], [["first"], ["second"]])
+
+    def test_txt_with_commas_is_detected_as_comma(self) -> None:
+        rows = self._load_text("input.txt", "id,Title\n1,first\n2,second\n")
+
+        self.assertEqual([row["Title"] for row in rows], [["first"], ["second"]])
+
+    def test_txt_tsv_with_list_cells_is_detected_as_tab(self) -> None:
+        rows = self._load_text(
+            "input.txt",
+            "id\tTitle\tDescription\n"
+            "1\t['Alice', 'Bob']\tA, B, and C\n"
+            "2\t['Carol', 'Dave']\tx, y\n",
+        )
+
+        self.assertEqual(
+            [row["Title"] for row in rows], [["Alice", "Bob"], ["Carol", "Dave"]]
+        )
+
+    def test_txt_csv_with_list_cells_is_detected_as_comma(self) -> None:
+        rows = self._load_text(
+            "input.txt",
+            "id,Title\n1,\"['Alice', 'Bob']\"\n2,\"['Carol']\"\n",
+        )
+
+        self.assertEqual([row["Title"] for row in rows], [["Alice", "Bob"], ["Carol"]])
+
+    def test_csv_extension_with_tabs_is_rejected_as_wrong_delimiter(self) -> None:
+        with self.assertRaisesRegex(
+            MetadataInputError,
+            r"input\.csv:1: no column matches the ItemType fields; .*"
+            r"\(used 'comma'\); specify --delimiter comma or --delimiter tab$",
+        ):
+            self._load_text("input.csv", "id\tTitle\n1\tfirst\n")
+
+    def test_explicit_tab_delimiter_overrides_csv_extension(self) -> None:
+        rows = self._load_text("input.csv", "id\tTitle\n1\tfirst\n", delimiter="\t")
+
+        self.assertEqual(rows[0]["Title"], ["first"])
 
     def test_duplicate_column_name_is_rejected_with_positions(self) -> None:
         with self.assertRaisesRegex(

@@ -145,6 +145,7 @@ uv run python src/scripts/generate_metadata_imports.py \
 | 引数 | 必須 | 既定値 | 説明 |
 |---|---:|---|---|
 | `--input PATH` | 必須 | なし | ソースCSV/TSV |
+| `--delimiter {auto,comma,tab}` | 任意 | `auto` | 入力ファイルの区切り文字。`comma` はカンマ、`tab` はタブ |
 | `--output-dir PATH` | 必須 | なし | 生成ファイルの出力先 |
 | `--registration-config PATH` | 任意 | `config/metadata_registration.json` | 登録設定JSON |
 | `--index-name NAME` | 任意 | 設定の `default_index` | 使用するIndex名。IndexIDは `indexes` から解決する |
@@ -152,6 +153,8 @@ uv run python src/scripts/generate_metadata_imports.py \
 | `--chunk-size N` | 任意 | `0` | 1ファイル当たりのレコード数。`0` は分割しない |
 | `--zip` | 任意 | 無効 | TSVに加えて登録用ZIPを生成する |
 | `--keep-tsv` | 任意 | 無効 | `--zip` 使用時もZIP化前のTSVを残す |
+
+`--delimiter auto` では、拡張子が `.tsv` ならタブ、`.csv` ならカンマとして読み込みます。それ以外の拡張子（`.txt` や拡張子なしなど）では、ヘッダー行（1行目）のタブとカンマの数で判定し、タブの方が多ければタブ、それ以外はカンマとして扱います。ヘッダーにItem Typeの項目名と一致する列が1つもない場合は、区切り文字の誤りとみなして生成を停止します。拡張子と実際の区切り文字が異なるファイル（例: タブ区切りの `.csv`）は `--delimiter tab` のように明示してください。
 
 `--zip` を指定しない場合はTSVだけを生成し、TSVは常に残ります。`--zip` を指定して `--keep-tsv` を指定しない場合、TSVはZIPへ格納した後に削除されます。
 

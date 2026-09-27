@@ -134,6 +134,7 @@ class MetadataGenerationConfig:
     zip_outputs: bool = False
     keep_tsv: bool = True
     registration_config_path: Path = DEFAULT_REGISTRATION_CONFIG_PATH
+    delimiter: str = "auto"
 
 
 @dataclass(frozen=True)
@@ -228,8 +229,29 @@ def process_date(date_str: str) -> str:
     return date_str.split("T", 1)[0]
 
 
+DELIMITERS = {"comma": ",", "tab": "\t"}
+
+
+def resolve_delimiter(name: str) -> str | None:
+    if name == "auto":
+        return None
+    try:
+        return DELIMITERS[name]
+    except KeyError:
+        raise ValueError(
+            f"Unknown delimiter {name!r}; use auto, {', '.join(DELIMITERS)}"
+        ) from None
+
+
 def detect_delimiter(path: Path) -> str:
-    return "\t" if path.suffix.lower() == ".tsv" else ","
+    suffix = path.suffix.lower()
+    if suffix == ".tsv":
+        return "\t"
+    if suffix == ".csv":
+        return ","
+    with path.open("r", encoding="utf-8-sig", errors="ignore", newline="") as file_obj:
+        header = file_obj.readline()
+    return "\t" if header.count("\t") > header.count(",") else ","
 
 
 def parse_literal_list(raw_value: Any) -> list[str]:
@@ -315,15 +337,30 @@ def validate_unique_columns(input_path: Path, fieldnames: list[str]) -> None:
         )
 
 
+def validate_header_matches_schema(
+    input_path: Path, fieldnames: list[str], schema: MetadataSchema, delimiter: str
+) -> None:
+    if any(name in schema.column_bindings for name in fieldnames):
+        return
+    names = {value: key for key, value in DELIMITERS.items()}
+    name = names.get(delimiter, delimiter)
+    raise MetadataInputError(
+        f"{input_path}:1: no column matches the ItemType fields; the delimiter "
+        f"may be wrong (used {name!r}); specify --delimiter comma or --delimiter tab"
+    )
+
+
 def load_rows(
     input_path: Path,
     schema: MetadataSchema,
     date_like_fields: frozenset[str] = frozenset(),
+    delimiter: str | None = None,
 ) -> list[dict[str, Any]]:
     if not input_path.exists():
         raise FileNotFoundError(f"Input file was not found: {input_path}")
 
-    delimiter = detect_delimiter(input_path)
+    if delimiter is None:
+        delimiter = detect_delimiter(input_path)
     previous_limit = csv.field_size_limit(INPUT_FIELD_SIZE_LIMIT)
     try:
         with input_path.open("r", encoding="utf-8-sig", newline="") as file_obj:
@@ -331,6 +368,9 @@ def load_rows(
             try:
                 if reader.fieldnames is not None:
                     validate_unique_columns(input_path, list(reader.fieldnames))
+                    validate_header_matches_schema(
+                        input_path, list(reader.fieldnames), schema, delimiter
+                    )
                 rows: list[dict[str, Any]] = []
                 for row_number, row in enumerate(reader, start=2):
                     try:
@@ -462,7 +502,12 @@ def generate_metadata_artifacts(
 ) -> list[GeneratedArtifact]:
     runtime = _build_metadata_runtime(config)
     schema = runtime.schema
-    rows = load_rows(config.input_path, schema, runtime.date_like_fields)
+    rows = load_rows(
+        config.input_path,
+        schema,
+        runtime.date_like_fields,
+        resolve_delimiter(config.delimiter),
+    )
     if not rows:
         return []
 
