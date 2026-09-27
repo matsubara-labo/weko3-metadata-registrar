@@ -113,6 +113,10 @@ INVALID_ROWS_REPORT_NAME = "invalid_rows.tsv"
 INVALID_ROWS_REPORT_COLUMNS = ("_invalid_row", "_invalid_reason")
 MAX_LISTED_ROW_ERRORS = 50
 
+# Optional input column giving a row's language for a field with a language child.
+LANGUAGE_COLUMN_SUFFIX = "_lang"
+WEKO_TITLE_ERROR = "Title is required item."
+
 # Largest limit accepted on every platform (sys.maxsize overflows on Windows).
 INPUT_FIELD_SIZE_LIMIT = 2**31 - 1
 
@@ -136,6 +140,22 @@ class MetadataSchema:
     default_languages: dict[str, str]
     field_attributes: dict[str, str]
     display_columns: dict[str, list[str] | str]
+    # Non-hidden fields mapped to JPCOAR title; WEKO ignores hidden ones.
+    title_fields: frozenset[str] = frozenset()
+    hidden_title_fields: frozenset[str] = frozenset()
+
+    @property
+    def language_fields(self) -> list[str]:
+        return [
+            field_name
+            for field_name, binding in self.column_bindings.items()
+            if not isinstance(binding, str)
+            and any(column.endswith("_language") for column in binding)
+        ]
+
+
+def language_column(field_name: str) -> str:
+    return f"{field_name}{LANGUAGE_COLUMN_SUFFIX}"
 
 
 @dataclass(frozen=True)
@@ -210,6 +230,15 @@ def _build_metadata_runtime(config: MetadataGenerationConfig) -> _MetadataRuntim
             column_bindings[field.name] = list(field.binding_templates)
             display_columns[field.name] = list(field.display_templates)
 
+    field_names = {field.name for field in item_type.fields}
+    for field in item_type.fields:
+        column = language_column(field.name)
+        if any(value.language for value in field.values) and column in field_names:
+            raise MetadataInputError(
+                f"ItemType field {column!r} has the name of the language column "
+                f"for field {field.name!r}; rename one of them in the ItemType"
+            )
+
     schema = MetadataSchema(
         item_type_name=item_type.display_name,
         item_schema_url=f"{settings.weko_base_url}/items/jsonschema/{item_type.id}",
@@ -220,6 +249,16 @@ def _build_metadata_runtime(config: MetadataGenerationConfig) -> _MetadataRuntim
         default_languages=dict(settings.default_languages),
         field_attributes={field.name: field.attribute for field in item_type.fields},
         display_columns=display_columns,
+        title_fields=frozenset(
+            field.name
+            for field in item_type.fields
+            if field.key in item_type.title_field_keys and not field.hidden
+        ),
+        hidden_title_fields=frozenset(
+            field.name
+            for field in item_type.fields
+            if field.key in item_type.title_field_keys and field.hidden
+        ),
     )
     return _MetadataRuntime(
         schema=schema,
@@ -368,6 +407,29 @@ def normalize_row(
             value = normalize_date(field_name, value)
         normalized[field_name] = value
 
+    for field_name in schema.language_fields:
+        column = language_column(field_name)
+        language = ""
+        if normalized[field_name]:
+            try:
+                languages = parse_literal_list(source_row.get(column, ""))
+            except MetadataInputError as exc:
+                raise MetadataInputError(f"{column!r}: {exc}") from exc
+            language = next((entry for entry in languages if entry.strip()), "")
+            language = language.strip() or schema.default_languages.get(field_name, "")
+        normalized[column] = language
+
+    if schema.title_fields and not any(
+        normalized[field_name] and normalized.get(language_column(field_name))
+        for field_name in schema.title_fields
+    ):
+        names = ", ".join(repr(name) for name in sorted(schema.title_fields))
+        raise MetadataInputError(
+            f"no title field ({names}) has both a value and a language; WEKO "
+            f"rejects the record ({WEKO_TITLE_ERROR!r}); fill a '<field>_lang' "
+            "column or set default_languages"
+        )
+
     for field_name, value in normalized.items():
         for entry in value if isinstance(value, list) else [value]:
             if len(entry) > WEKO_TSV_FIELD_SIZE_LIMIT:
@@ -423,6 +485,7 @@ def check_columns(
     strict: bool = False,
 ) -> list[str]:
     field_names = list(schema.column_bindings)
+    language_columns = {language_column(name) for name in schema.language_fields}
     present = set(fieldnames)
     # Suggest only fields the header lacks; a present field is not a typo target.
     candidates = [name for name in field_names if name not in present]
@@ -430,6 +493,7 @@ def check_columns(
     for name in fieldnames:
         if (
             name in schema.column_bindings
+            or name in language_columns
             or name in INVALID_ROWS_REPORT_COLUMNS
             or not name.strip()  # unnamed, e.g. a pandas index column
         ):
@@ -449,6 +513,48 @@ def check_columns(
             suffix = " (Required)" if required else ""
             warnings.append(f"missing column {field_name!r}{suffix}")
     return [f"{input_path}:1: {warning}" for warning in warnings]
+
+
+def check_languages(
+    input_path: Path, fieldnames: list[str], schema: MetadataSchema
+) -> list[str]:
+    present = set(fieldnames)
+    if schema.hidden_title_fields and not schema.title_fields:
+        names = ", ".join(repr(name) for name in sorted(schema.hidden_title_fields))
+        raise MetadataInputError(
+            f"{input_path}:1: every title field ({names}) is hidden; WEKO ignores "
+            f"hidden title fields, so every record will fail ({WEKO_TITLE_ERROR!r})"
+        )
+
+    language_fields = schema.language_fields
+    missing = [
+        field_name
+        for field_name in language_fields
+        if field_name not in schema.default_languages
+        and language_column(field_name) not in present
+    ]
+    title_fields = sorted(schema.title_fields)
+    if title_fields and all(
+        field_name not in language_fields or field_name in missing
+        for field_name in title_fields
+    ):
+        names = ", ".join(repr(name) for name in title_fields)
+        raise MetadataInputError(
+            f"{input_path}:1: no title field ({names}) has a language; WEKO would "
+            f"reject every record ({WEKO_TITLE_ERROR!r}); set default_languages "
+            "or add a '<field>_lang' column for one of them"
+        )
+
+    warnings: list[str] = []
+    for field_name in missing:
+        column = language_column(field_name)
+        if field_name in present:
+            warnings.append(
+                f"{input_path}:1: field {field_name!r} has no language and its "
+                f"language cells will be empty; set "
+                f"default_languages[{field_name!r}] or add a {column!r} column"
+            )
+    return warnings
 
 
 def format_row_errors(input_path: Path, errors: list[RowError]) -> str:
@@ -513,6 +619,9 @@ def load_rows_with_errors(
                         list(reader.fieldnames),
                         schema,
                         strict=strict_columns,
+                    )
+                    warnings.extend(
+                        check_languages(input_path, list(reader.fieldnames), schema)
                     )
                     if on_warning is not None:
                         for warning in warnings:
@@ -605,11 +714,15 @@ def build_value_row(
             )
             continue
 
+        language = ""
+        if field_value:
+            language = row.get(
+                language_column(field_name),
+                schema.default_languages.get(field_name, ""),
+            )
         for column_binding in binding:
             if column_binding.endswith("_language"):
-                values.append(
-                    schema.default_languages.get(field_name, "") if field_value else ""
-                )
+                values.append(language)
             else:
                 values.append(str(field_value))
 

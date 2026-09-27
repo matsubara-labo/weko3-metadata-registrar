@@ -104,6 +104,70 @@ class LoadItemTypeExportTests(unittest.TestCase):
             with self.assertRaisesRegex(ItemTypeExportError, "schema.required"):
                 load_item_type_export(export_path)
 
+    def test_sample_mapping_identifies_title_fields(self) -> None:
+        item_type = load_item_type_export(SAMPLE_EXPORT)
+
+        self.assertEqual(item_type.title_field_keys, {"item_30001_title0"})
+        fields = {field.name: field for field in item_type.fields}
+        self.assertEqual(fields["Title"].key, "item_30001_title0")
+        self.assertNotIn(fields["Title_g"].key, item_type.title_field_keys)
+
+    def test_missing_mapping_member_means_no_title_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            export_path = Path(temporary_directory) / "no-mapping.zip"
+            write_minimal_export(
+                export_path,
+                {
+                    "id": 1,
+                    "schema": {"properties": {}, "required": []},
+                    "render": {"table_row": [], "meta_list": {}, "meta_fix": {}},
+                },
+            )
+
+            item_type = load_item_type_export(export_path)
+
+        self.assertEqual(item_type.title_field_keys, frozenset())
+
+    def test_title_mapping_uses_jpcoar_mapping_only(self) -> None:
+        title = {
+            "@value": "subitem_title",
+            "@attributes": {"xml:lang": "subitem_title_language"},
+        }
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            export_path = Path(temporary_directory) / "v1-mapping.zip"
+            write_minimal_export(
+                export_path,
+                {
+                    "id": 1,
+                    "schema": {"properties": {}, "required": []},
+                    "render": {"table_row": [], "meta_list": {}, "meta_fix": {}},
+                },
+            )
+            with zipfile.ZipFile(export_path, "a") as archive:
+                archive.writestr(
+                    "ItemTypeMapping.json",
+                    json.dumps(
+                        {
+                            "mapping": {
+                                "item_a": {
+                                    "jpcoar_mapping": "",
+                                    "jpcoar_v1_mapping": {"title": title},
+                                },
+                                "item_b": {
+                                    "jpcoar_mapping": {
+                                        "title": {"@value": "subitem_title"}
+                                    }
+                                },
+                                "item_c": {"jpcoar_mapping": {"title": title}},
+                            }
+                        }
+                    ),
+                )
+
+            item_type = load_item_type_export(export_path)
+
+        self.assertEqual(item_type.title_field_keys, {"item_c"})
+
 
 if __name__ == "__main__":
     unittest.main()
