@@ -82,6 +82,7 @@ WEKO内でAdministration >  WorkFlow > FlowList・WorkFlow Listに移動し、Wo
 | `default_index` | 必須 | `--index-name`（後述） を省略した場合に使用するIndex名 |
 | `publish_date` | 必須 | `--publish-date`（後述） を省略した場合に使用する公開日（`YYYY-MM-DD`） |
 | `default_languages` | 必須 | 言語子項目へ設定する既定値を、入力列名ごとに指定するオブジェクト |
+| `publish_status` | 任意 | `.PUBLISH_STATUS` に設定する公開ステータス。`public`（公開、既定値）または `private`（非公開）のみ指定可能 |
 
 `Index` はメタデータの登録先となるWEKO上のコレクションです。対象WEKOのIndex管理画面で登録先のIndex名とIndexIDを確認し、`indexes` に設定してください。
 （メタデータの登録結果（[例](./sample/ResearchArtifact(40001).tsv)や、ワークフローの設定画面から確認できます）
@@ -145,6 +146,7 @@ uv run python src/scripts/generate_metadata_imports.py \
 | `--registration-config PATH` | 任意 | `config/metadata_registration.json` | 登録設定JSON |
 | `--index-name NAME` | 任意 | 設定の `default_index` | 使用するIndex名。IndexIDは `indexes` から解決する |
 | `--publish-date YYYY-MM-DD` | 任意 | 設定の `publish_date` | 公開日を一時的に上書きする |
+| `--publish-status {public,private}` | 任意 | 設定の `publish_status`（未設定時は `public`） | 公開ステータスを一時的に上書きする |
 | `--chunk-size N` | 任意 | `0` | 1ファイル当たりのレコード数。`0` は分割しない |
 | `--zip` | 任意 | 無効 | TSVに加えて登録用ZIPを生成する |
 | `--keep-tsv` | 任意 | 無効 | `--zip` 使用時もZIP化前のTSVを残す |
@@ -285,7 +287,7 @@ Item Typeのメタデータ項目ではない制御列は、次の方針で生�
 |---|---|---|
 | `#ID`, `URI` | 空欄 | WEKOインポート形式の固定値 |
 | `.IndexID[0]`, `.POS_INDEX[0]` | `indexes` / 選択したIndex名 | `Allow Multiple` |
-| `.PUBLISH_STATUS` | `public` | `Required` |
+| `.PUBLISH_STATUS` | `--publish-status` / 設定の `publish_status`（既定値 `public`） | `Required` |
 | `.FEEDBACK_MAIL[0]`, `.RESEAECHMAP_LINKAGE`, `.CNRI`, `.DOI_RA`, `.DOI` | 空欄 | WEKOインポート形式の固定値 |
 | `Keep/Upgrade Version` | `keep` | `Required` |
 | `PubDate` | `publish_date` | Item Type ZIPの `render.meta_fix.pubdate.option` から取得した属性 |

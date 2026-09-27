@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import csv
+import io
 import json
 import tempfile
 import unittest
@@ -14,6 +16,8 @@ from generation.metadata_pipeline import (
     load_metadata_schema,
     normalize_row,
 )
+from generation.registration_config import RegistrationConfigError
+from scripts.generate_metadata_imports import build_parser as build_generation_parser
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SAMPLE_EXPORT = REPOSITORY_ROOT / "sample" / "config" / "ItemType_export_sample.zip"
@@ -216,6 +220,75 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
         self.assertEqual(rows[5][display_to_index["Creator[0].None"]], "Alice")
         self.assertEqual(rows[5][display_to_index["Creator[1].None"]], "Bob")
         self.assertEqual(rows[5][display_to_index["PublicationYear_g"]], "2026-08-23")
+
+    def generate_publish_status(
+        self, *, configured: str | None, override: str | None
+    ) -> str:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source_path = root / "source.csv"
+            source_path.write_text("corpusid,Title\n123,Main title\n", encoding="utf-8")
+            settings = {
+                "weko_base_url": "https://weko.example.org",
+                "item_type_export": str(SAMPLE_EXPORT),
+                "indexes": {"Example": "999"},
+                "default_index": "Example",
+                "publish_date": "2026-08-23",
+                "default_languages": {"Title": "en"},
+            }
+            if configured is not None:
+                settings["publish_status"] = configured
+            settings_path = root / "settings.json"
+            settings_path.write_text(json.dumps(settings), encoding="utf-8")
+
+            artifacts = generate_metadata_artifacts(
+                MetadataGenerationConfig(
+                    input_path=source_path,
+                    output_dir=root / "output",
+                    publish_status=override,
+                    registration_config_path=settings_path,
+                )
+            )
+            output_path = artifacts[0].tsv_path
+            self.assertIsNotNone(output_path)
+            with output_path.open("r", encoding="utf-8-sig", newline="") as file_obj:
+                rows = list(csv.reader(file_obj, delimiter="\t"))
+        return rows[5][rows[2].index(".PUBLISH_STATUS")]
+
+    def test_publish_status_uses_config_then_override(self) -> None:
+        self.assertEqual(
+            self.generate_publish_status(configured=None, override=None), "public"
+        )
+        self.assertEqual(
+            self.generate_publish_status(configured="private", override=None),
+            "private",
+        )
+        self.assertEqual(
+            self.generate_publish_status(configured="private", override="public"),
+            "public",
+        )
+        self.assertEqual(
+            self.generate_publish_status(configured=None, override="private"),
+            "private",
+        )
+
+    def test_invalid_publish_status_override_is_rejected(self) -> None:
+        with self.assertRaisesRegex(RegistrationConfigError, "publish_status"):
+            self.generate_publish_status(configured=None, override="draft")
+
+    def test_generation_cli_parses_publish_status(self) -> None:
+        base_args = ["--input", "in.csv", "--output-dir", "out"]
+        parser = build_generation_parser()
+        self.assertIsNone(parser.parse_args(base_args).publish_status)
+        self.assertEqual(
+            parser.parse_args(
+                [*base_args, "--publish-status", "private"]
+            ).publish_status,
+            "private",
+        )
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                parser.parse_args([*base_args, "--publish-status", "draft"])
 
 
 if __name__ == "__main__":
