@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import ast
 import csv
+import re
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
@@ -97,12 +99,22 @@ WEKO_IMPORT_CONTROL_COLUMNS = (
 # WEKO3 reads uploaded TSV files with csv.reader at Python's default
 # field_size_limit, so it cannot load any cell longer than this.
 WEKO_TSV_FIELD_SIZE_LIMIT = 131072
+
+GENERATED_ARTIFACT_NAME_PATTERN = re.compile(
+    r"(?:output_write(?:_\d+)?\.tsv|import(?:_\d+)?\.zip)", re.IGNORECASE
+)
+MAX_LISTED_EXISTING_ARTIFACTS = 10
+
 # Largest limit accepted on every platform (sys.maxsize overflows on Windows).
 INPUT_FIELD_SIZE_LIMIT = 2**31 - 1
 
 
 class MetadataInputError(ValueError):
     """Raised when source metadata cannot satisfy the exported ItemType."""
+
+
+class OutputExistsError(FileExistsError):
+    """Raised when output_dir already holds generated artifacts."""
 
 
 @dataclass(frozen=True)
@@ -135,6 +147,7 @@ class MetadataGenerationConfig:
     keep_tsv: bool = True
     registration_config_path: Path = DEFAULT_REGISTRATION_CONFIG_PATH
     delimiter: str = "auto"
+    overwrite: bool = False
 
 
 @dataclass(frozen=True)
@@ -497,9 +510,52 @@ def zip_tsv(tsv_path: Path, zip_path: Path) -> None:
         archive.write(tsv_path, Path("data") / tsv_path.name)
 
 
+def find_generated_artifacts(output_dir: Path) -> list[Path]:
+    if not output_dir.is_dir():
+        return []
+    return sorted(
+        path
+        for path in output_dir.iterdir()
+        if path.is_file() and GENERATED_ARTIFACT_NAME_PATTERN.fullmatch(path.name)
+    )
+
+
+def find_unrelated_zip_files(output_dir: Path) -> list[Path]:
+    if not output_dir.is_dir():
+        return []
+    return sorted(
+        path
+        for path in output_dir.iterdir()
+        if path.is_file()
+        and path.suffix.lower() == ".zip"
+        and not GENERATED_ARTIFACT_NAME_PATTERN.fullmatch(path.name)
+    )
+
+
+def _format_existing_artifacts_error(output_dir: Path, existing: list[Path]) -> str:
+    names = [path.name for path in existing[:MAX_LISTED_EXISTING_ARTIFACTS]]
+    listed = ", ".join(names)
+    remaining = len(existing) - len(names)
+    if remaining > 0:
+        listed += f" ... and {remaining} more"
+    return (
+        f"Output directory already contains generated files: {output_dir} "
+        f"({listed}). Move or register them first, or pass --overwrite "
+        "to remove all of them before generating."
+    )
+
+
 def generate_metadata_artifacts(
     config: MetadataGenerationConfig,
+    *,
+    on_remove: Callable[[Path], None] | None = None,
 ) -> list[GeneratedArtifact]:
+    existing = find_generated_artifacts(config.output_dir)
+    if existing and not config.overwrite:
+        raise OutputExistsError(
+            _format_existing_artifacts_error(config.output_dir, existing)
+        )
+
     runtime = _build_metadata_runtime(config)
     schema = runtime.schema
     rows = load_rows(
@@ -510,6 +566,11 @@ def generate_metadata_artifacts(
     )
     if not rows:
         return []
+
+    for path in existing:
+        path.unlink()
+        if on_remove is not None:
+            on_remove(path)
 
     chunks = chunk_rows(rows, config.chunk_size)
     artifacts: list[GeneratedArtifact] = []

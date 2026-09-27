@@ -14,6 +14,7 @@ if __package__ in (None, ""):
 from generation.metadata_pipeline import (
     DEFAULT_REGISTRATION_CONFIG_PATH,
     MetadataGenerationConfig,
+    find_unrelated_zip_files,
     generate_metadata_artifacts,
     summarize_artifacts,
 )
@@ -63,6 +64,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Keep TSV files when zip files are created.",
     )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Remove all existing output_write*.tsv/import*.zip files in the output directory before generating. Without it, generation stops if any exist.",
+    )
     return parser
 
 
@@ -78,8 +84,11 @@ def main() -> int:
         keep_tsv=args.keep_tsv or not args.zip,
         registration_config_path=args.registration_config,
         delimiter=args.delimiter,
+        overwrite=args.overwrite,
     )
-    artifacts = generate_metadata_artifacts(config)
+    artifacts = generate_metadata_artifacts(
+        config, on_remove=lambda path: print(f"removed {path}")
+    )
     print(summarize_artifacts(artifacts))
     for artifact in artifacts:
         print(
@@ -87,6 +96,11 @@ def main() -> int:
         )
         if artifact.zip_path:
             print(f"chunk={artifact.chunk_index} zip={artifact.zip_path}")
+    for path in find_unrelated_zip_files(config.output_dir):
+        print(
+            f"warning: {path} is not a generated file but will be imported "
+            "if this directory is used as --zip-dir"
+        )
     return 0
 
 
