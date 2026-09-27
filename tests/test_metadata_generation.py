@@ -567,8 +567,17 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
         )
 
     def test_invalid_publish_status_override_is_rejected(self) -> None:
-        with self.assertRaisesRegex(RegistrationConfigError, "publish_status"):
+        with self.assertRaisesRegex(
+            RegistrationConfigError, "--publish-status must be one of"
+        ):
             self.generate_publish_status(configured=None, override="draft")
+
+    def test_invalid_publish_status_in_config_names_config_key(self) -> None:
+        with self.assertRaises(RegistrationConfigError) as caught:
+            self.generate_publish_status(configured="draft", override=None)
+        message = str(caught.exception)
+        self.assertIn("publish_status must be one of", message)
+        self.assertNotIn("--publish-status", message)
 
     def test_generation_cli_parses_publish_status(self) -> None:
         base_args = ["--input", "in.csv", "--output-dir", "out"]

@@ -71,10 +71,10 @@ def _string_mapping(raw: dict[str, Any], key: str) -> dict[str, str]:
     return mapping
 
 
-def validate_publish_status(value: object) -> str:
+def validate_publish_status(value: object, source: str = "publish_status") -> str:
     if value not in PUBLISH_STATUSES:
         raise RegistrationConfigError(
-            f"publish_status must be one of {', '.join(PUBLISH_STATUSES)}: {value!r}"
+            f"{source} must be one of {', '.join(PUBLISH_STATUSES)}: {value!r}"
         )
     return value
 
