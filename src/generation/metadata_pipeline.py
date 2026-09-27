@@ -94,6 +94,13 @@ WEKO_IMPORT_CONTROL_COLUMNS = (
 )
 
 
+# WEKO3 reads uploaded TSV files with csv.reader at Python's default
+# field_size_limit, so it cannot load any cell longer than this.
+WEKO_TSV_FIELD_SIZE_LIMIT = 131072
+# Largest limit accepted on every platform (sys.maxsize overflows on Windows).
+INPUT_FIELD_SIZE_LIMIT = 2**31 - 1
+
+
 class MetadataInputError(ValueError):
     """Raised when source metadata cannot satisfy the exported ItemType."""
 
@@ -282,6 +289,14 @@ def normalize_row(
         if field_name in date_like_fields and value:
             value = process_date(value)
         normalized[field_name] = value
+
+    for field_name, value in normalized.items():
+        for entry in value if isinstance(value, list) else [value]:
+            if len(entry) > WEKO_TSV_FIELD_SIZE_LIMIT:
+                raise MetadataInputError(
+                    f"{field_name!r} value is {len(entry)} characters; WEKO cannot "
+                    f"read TSV cells longer than {WEKO_TSV_FIELD_SIZE_LIMIT} characters"
+                )
     return normalized
 
 
@@ -309,17 +324,30 @@ def load_rows(
         raise FileNotFoundError(f"Input file was not found: {input_path}")
 
     delimiter = detect_delimiter(input_path)
-    with input_path.open("r", encoding="utf-8-sig", newline="") as file_obj:
-        reader = csv.DictReader(file_obj, delimiter=delimiter)
-        if reader.fieldnames is not None:
-            validate_unique_columns(input_path, list(reader.fieldnames))
-        rows: list[dict[str, Any]] = []
-        for row_number, row in enumerate(reader, start=2):
+    previous_limit = csv.field_size_limit(INPUT_FIELD_SIZE_LIMIT)
+    try:
+        with input_path.open("r", encoding="utf-8-sig", newline="") as file_obj:
+            reader = csv.DictReader(file_obj, delimiter=delimiter)
             try:
-                rows.append(normalize_row(row, schema, date_like_fields))
-            except MetadataInputError as exc:
-                raise MetadataInputError(f"{input_path}:{row_number}: {exc}") from exc
-        return rows
+                if reader.fieldnames is not None:
+                    validate_unique_columns(input_path, list(reader.fieldnames))
+                rows: list[dict[str, Any]] = []
+                for row_number, row in enumerate(reader, start=2):
+                    try:
+                        rows.append(normalize_row(row, schema, date_like_fields))
+                    except MetadataInputError as exc:
+                        raise MetadataInputError(
+                            f"{input_path}:{row_number}: {exc}"
+                        ) from exc
+            except csv.Error as exc:
+                # DictReader.line_num is only updated after a successful row.
+                line = reader.reader.line_num
+                raise MetadataInputError(
+                    f"{input_path}: line {line}: malformed input: {exc}"
+                ) from exc
+            return rows
+    finally:
+        csv.field_size_limit(previous_limit)
 
 
 def chunk_rows(

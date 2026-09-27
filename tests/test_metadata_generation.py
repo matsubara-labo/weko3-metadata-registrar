@@ -5,8 +5,10 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from generation.metadata_pipeline import (
+    WEKO_TSV_FIELD_SIZE_LIMIT,
     MetadataGenerationConfig,
     MetadataInputError,
     MetadataSchema,
@@ -14,6 +16,7 @@ from generation.metadata_pipeline import (
     load_metadata_schema,
     load_rows,
     normalize_row,
+    write_tsv,
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -150,6 +153,42 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
 
     def test_empty_file_returns_no_rows(self) -> None:
         self.assertEqual(self._load_text("input.csv", ""), [])
+
+    def test_cell_over_weko_limit_is_rejected_with_column(self) -> None:
+        previous_limit = csv.field_size_limit()
+        with self.assertRaisesRegex(
+            MetadataInputError,
+            r"input\.tsv:2: 'Title' value is 200000 characters; "
+            r"WEKO cannot read TSV cells longer than 131072 characters$",
+        ):
+            self._load_text("input.tsv", "Title\n" + "a" * 200_000 + "\n")
+        self.assertEqual(csv.field_size_limit(), previous_limit)
+
+    def test_cell_at_weko_limit_is_loaded_and_written(self) -> None:
+        previous_limit = csv.field_size_limit()
+        value = "a" * WEKO_TSV_FIELD_SIZE_LIMIT
+        rows = self._load_text("input.tsv", f"Title\n{value}\n")
+        self.assertEqual(csv.field_size_limit(), previous_limit)
+        self.assertEqual(rows[0]["Title"], [value])
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output_path = Path(temporary_directory) / "output.tsv"
+            write_tsv(rows, output_path, self._title_schema())
+            with output_path.open("r", encoding="utf-8-sig", newline="") as file_obj:
+                written = list(csv.reader(file_obj, delimiter="\t"))
+        self.assertEqual(written[5], [value])
+
+    def test_csv_error_is_reported_with_line_number(self) -> None:
+        previous_limit = csv.field_size_limit()
+        with (
+            mock.patch("generation.metadata_pipeline.INPUT_FIELD_SIZE_LIMIT", 10),
+            self.assertRaisesRegex(
+                MetadataInputError,
+                r"input\.csv: line 3: malformed input: field larger than",
+            ),
+        ):
+            self._load_text("input.csv", "Title\nshort\n" + "a" * 20 + "\n")
+        self.assertEqual(csv.field_size_limit(), previous_limit)
 
     def test_generation_uses_config_and_exported_item_type(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
