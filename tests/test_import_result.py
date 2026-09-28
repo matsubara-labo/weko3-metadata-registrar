@@ -14,7 +14,9 @@ from importers.import_result import (
     ImportResultError,
     count_expected_records,
     parse_import_result,
+    read_import_tsv_rows,
     summarize_import_result,
+    write_failed_rows,
 )
 from importers.selenium_auto_register import (
     MAX_IMPORT_ATTEMPTS,
@@ -133,6 +135,52 @@ class SummaryTests(unittest.TestCase):
         self.assertFalse(self.summarize([], 0).succeeded)
 
 
+class FailedRowsTests(unittest.TestCase):
+    def write(self, rows: list[list[str]], record_count: int = 3):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        zip_path = write_import_zip(root / "import_001.zip", record_count)
+        summary = summarize_import_result(
+            write_result(root / "r.tsv", EN_HEADER, rows), zip_path
+        )
+        output_path = root / "import_001_failed_rows.tsv"
+        return zip_path, write_failed_rows(zip_path, summary, output_path), output_path
+
+    def read(self, path: Path) -> list[list[str]]:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            return list(csv.reader(handle, delimiter="\t"))
+
+    def test_failed_records_are_written_with_the_import_header(self) -> None:
+        zip_path, written, output_path = self.write(
+            [en_row(1, "FAILURE", "Error"), en_row(2), en_row(3, "FAILURE", "Error")]
+        )
+
+        self.assertEqual(written, 2)
+        header, data = read_import_tsv_rows(zip_path)
+        self.assertEqual(self.read(output_path), [*header, data[0], data[2]])
+        self.assertEqual(self.read(output_path)[5][3], "multi\nline title")
+
+    def test_count_mismatch_refuses_to_map_numbers(self) -> None:
+        # WEKO renumbers the records it imported, so No. shifts after a drop.
+        with self.assertRaisesRegex(ImportResultError, "cannot be matched"):
+            self.write([en_row(1, "FAILURE", "Error"), en_row(2)])
+
+    def test_no_file_without_failed_records(self) -> None:
+        _, written, output_path = self.write([en_row(1), en_row(2), en_row(3)])
+
+        self.assertEqual(written, 0)
+        self.assertFalse(output_path.exists())
+
+    def test_unknown_record_number_is_an_error(self) -> None:
+        for no in ("x", "0", "4"):
+            with self.subTest(no=no):
+                with self.assertRaises(ImportResultError):
+                    self.write(
+                        [en_row(1), en_row(2), [no, "", "", "", "FAILURE", "Error"]]
+                    )
+
+
 class StoreResultFileTests(unittest.TestCase):
     def test_failed_rename_keeps_the_downloaded_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -243,12 +291,35 @@ class RunImportResultTests(unittest.TestCase):
                 (base_dir / "output" / "failed_zip_data" / "import.zip").exists()
             )
             self.assertFalse((base_dir / "output" / "uploaded_zip_data").exists())
+            failed_rows = (
+                base_dir / "output" / "failed_zip_data" / ("import_failed_rows.tsv")
+            )
+            with failed_rows.open("r", encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.reader(handle, delimiter="\t"))
+            self.assertEqual(len(rows), 6)
+            self.assertEqual(rows[5][3], "title 1")
             self.assertTrue(
                 (base_dir / "output" / "import_results" / "import_result.tsv").exists()
             )
+        self.assertIn("failed rows: 1 row(s) written to", output)
         self.assertIn("success=1/2 failure=1 expected=2", output)
         self.assertIn("Error: failed", output)
         self.assertGreater(MAX_IMPORT_ATTEMPTS, 1)
+
+    def test_existing_failed_rows_file_is_not_overwritten(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base_dir = Path(directory)
+            failed_dir = base_dir / "output" / "failed_zip_data"
+            failed_dir.mkdir(parents=True)
+            edited = failed_dir / "import_failed_rows.tsv"
+            edited.write_text("edited", encoding="utf-8")
+
+            self.run_with_result(
+                base_dir, [en_row(1), en_row(2, "FAILURE", "Error: failed")]
+            )
+
+            self.assertEqual(edited.read_text(encoding="utf-8"), "edited")
+            self.assertTrue((failed_dir / "import_failed_rows_001.tsv").exists())
 
     def test_failure_does_not_delete_zip_when_delete_requested(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

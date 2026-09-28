@@ -119,6 +119,71 @@ def count_expected_records(zip_path: Path) -> int:
     return count
 
 
+def read_import_tsv_rows(zip_path: Path) -> tuple[list[list[str]], list[list[str]]]:
+    """Return (header rows, data rows) of the single TSV in an import ZIP.
+
+    Blank rows are skipped as in count_expected_records, so data row N
+    (1-based) is the record WEKO reports as No. N.
+    """
+    with zipfile.ZipFile(zip_path) as archive:
+        names = [name for name in archive.namelist() if name.lower().endswith(".tsv")]
+        if len(names) != 1:
+            raise ImportResultError(
+                f"Expected one TSV in {zip_path}, found {len(names)}: {names}"
+            )
+        text = archive.read(names[0]).decode("utf-8-sig")
+    header: list[list[str]] = []
+    data: list[list[str]] = []
+    for cells in csv.reader(io.StringIO(text), delimiter="\t"):
+        if not cells or not any(cell.strip() for cell in cells):
+            continue
+        (header if cells[0].startswith("#") else data).append(cells)
+    return header, data
+
+
+def write_failed_rows(
+    zip_path: Path, summary: ImportResultSummary, output_path: Path
+) -> int:
+    """Write the failed records of zip_path as a WEKO import TSV.
+
+    The file keeps the ZIP's header rows, so it can be fixed, zipped under
+    data/ and imported again. Returns the number of rows written; nothing is
+    written without failed rows.
+
+    WEKO numbers the records it actually imported, so when it drops one the
+    later numbers shift. The mapping is therefore refused unless the result
+    has exactly one row per record.
+    """
+    header, data = read_import_tsv_rows(zip_path)
+    if len(summary.rows) != len(data):
+        raise ImportResultError(
+            f"the result has {len(summary.rows)} row(s) but {zip_path} has "
+            f"{len(data)} record(s), so result No. cannot be matched to records; "
+            "check WEKO manually"
+        )
+    selected: list[list[str]] = []
+    for row in summary.failed_rows:
+        try:
+            number = int(row.no)
+        except ValueError:
+            raise ImportResultError(
+                f"Import result No. {row.no!r} is not a record number"
+            ) from None
+        if not 1 <= number <= len(data):
+            raise ImportResultError(
+                f"Import result No. {number} is outside the {len(data)} "
+                f"record(s) in {zip_path}"
+            )
+        selected.append(data[number - 1])
+    if selected:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+            writer = csv.writer(file_obj, delimiter="\t", lineterminator="\n")
+            writer.writerows(header)
+            writer.writerows(selected)
+    return len(selected)
+
+
 def summarize_import_result(result_path: Path, zip_path: Path) -> ImportResultSummary:
     return ImportResultSummary(
         rows=tuple(parse_import_result(result_path)),

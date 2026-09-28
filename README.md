@@ -336,7 +336,18 @@ WEKO上の既存アイテムを識別子（`corpusid` など）で検索して�
 
 `--delete-zip-after-import` による削除は元に戻せません。`--keep-zip-after-import` と `--delete-zip-after-import` は同時に指定できず、両方を指定するとコマンドはエラーで終了します（`WekoImportConfig` で両方を有効にして `run_import` を呼んだ場合も、ZIPを処理する前に `ValueError` になります）。
 
-失敗行がある場合、件数が一致しない場合、または結果ファイルを解析できない場合は、上記のオプションにかかわらずZIPを削除せず、元のディレクトリにも残さずに `output/failed_zip_data`（`--failed-zip-dir` で変更可能）へ移動します。同名のファイルがある場合は連番を付けて移動します。このとき成功件数・失敗件数・期待件数と、失敗行（最大20行）の No.、Item ID、ステータス、インポート結果を表示し、`ImportResultError` で処理を中断します。この場合は再試行しません。一部のレコードがすでに登録されている可能性があるため、WEKO上の登録状況と結果ファイルを確認してから、必要なレコードだけを再投入してください。
+失敗行がある場合、件数が一致しない場合、または結果ファイルを解析できない場合は、上記のオプションにかかわらずZIPを削除せず、元のディレクトリにも残さずに `output/failed_zip_data`（`--failed-zip-dir` で変更可能）へ移動します。同名のファイルがある場合は連番を付けて移動します。このとき成功件数・失敗件数・期待件数と、失敗行（最大20行）の No.、Item ID、ステータス、インポート結果を表示し、`ImportResultError` で処理を中断します。この場合は再試行しません。
+
+結果ファイルで失敗（ステータスが `Done`/`完了` かつ結果が `Success`/`成功` 以外）となったレコードは、移動したZIPと同じディレクトリに `<ZIP名>_failed_rows.tsv`（例: `import_001_failed_rows.tsv`）として書き出し、`failed rows: <件数> row(s) written to <パス>` と表示します。このファイルはZIP内のTSVのヘッダー5行と失敗したレコードの行だけからなるWEKOインポート形式のTSV（UTF-8 BOM付き）で、結果ファイルの No. をZIP内のTSVのデータ行の順番（1始まり）として対応付けています。WEKOは失敗したレコードの登録を取り消すため（通常は登録されていません）、値を修正したうえで `data/` 配下に置いたZIPにすれば、そのレコードだけを再投入できます。
+
+```shell
+cd output/failed_zip_data
+mkdir -p retry/data
+cp import_001_failed_rows.tsv retry/data/output_write.tsv
+(cd retry && python -m zipfile -c ../import_001_retry.zip data)
+```
+
+結果ファイルの行数がZIP内のレコード数と一致しない場合は、失敗行ファイルを作成せず `could not write failed rows: ... cannot be matched to records` と表示します。WEKOは取り込み対象から外したレコードを詰めて番号を振るため、件数が一致しないと No. とレコードの対応が取れないからです。この場合と結果ファイルを解析できない場合は、WEKO上の登録状況と結果ファイルを確認してから、必要なレコードだけを再投入してください。失敗行ファイルと同名のファイルがすでにある場合は、上書きせず `import_001_failed_rows_001.tsv` のように連番を付けます。
 
 コンソールに `imported=<zip-path> result=<結果ファイルのパス>` が表示され、結果ファイルが保存されていることを確認してください。登録対象がない場合は `No zip files were found to import.` と表示して終了します。登録対象のZIPがあっても `--limit 0` を指定した場合は、`No zip files were imported because --limit 0 was given.` と表示して終了します。登録対象のZIPがすべて台帳によりスキップされた場合は、`No zip files were imported; <件数> zip file(s) were skipped because they are already in the import ledger.` と表示して終了します。
 
