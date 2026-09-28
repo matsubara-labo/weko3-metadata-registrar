@@ -166,6 +166,15 @@ class FailedRowsTests(unittest.TestCase):
         with self.assertRaisesRegex(ImportResultError, "cannot be matched"):
             self.write([en_row(1, "FAILURE", "Error"), en_row(2)])
 
+    def test_result_numbers_must_be_one_to_n_in_order(self) -> None:
+        # Counts match, but No. is duplicated or out of order.
+        for numbers in ([1, 1, 3], [1, 3, 2]):
+            with self.subTest(numbers=numbers):
+                rows = [en_row(number) for number in numbers]
+                rows[-1] = en_row(numbers[-1], "FAILURE", "Error")
+                with self.assertRaisesRegex(ImportResultError, "cannot be matched"):
+                    self.write(rows)
+
     def test_no_file_without_failed_records(self) -> None:
         _, written, output_path = self.write([en_row(1), en_row(2), en_row(3)])
 

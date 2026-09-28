@@ -152,7 +152,7 @@ def write_failed_rows(
 
     WEKO numbers the records it actually imported, so when it drops one the
     later numbers shift. The mapping is therefore refused unless the result
-    has exactly one row per record.
+    numbers exactly the ZIP's records 1..N in order.
     """
     header, data = read_import_tsv_rows(zip_path)
     if len(summary.rows) != len(data):
@@ -161,20 +161,17 @@ def write_failed_rows(
             f"{len(data)} record(s), so result No. cannot be matched to records; "
             "check WEKO manually"
         )
-    selected: list[list[str]] = []
-    for row in summary.failed_rows:
-        try:
-            number = int(row.no)
-        except ValueError:
-            raise ImportResultError(
-                f"Import result No. {row.no!r} is not a record number"
-            ) from None
-        if not 1 <= number <= len(data):
-            raise ImportResultError(
-                f"Import result No. {number} is outside the {len(data)} "
-                f"record(s) in {zip_path}"
-            )
-        selected.append(data[number - 1])
+    # Matching counts alone would let e.g. No. 1, 1, 3 through; require the
+    # result to number the records 1..N in order before trusting No.
+    numbers = [row.no for row in summary.rows]
+    expected = [str(number) for number in range(1, len(data) + 1)]
+    if numbers != expected:
+        raise ImportResultError(
+            f"the result numbers its rows {', '.join(numbers)} instead of "
+            f"1..{len(data)} in order, so result No. cannot be matched to "
+            f"records in {zip_path}; check WEKO manually"
+        )
+    selected = [data[int(row.no) - 1] for row in summary.failed_rows]
     if selected:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with output_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
