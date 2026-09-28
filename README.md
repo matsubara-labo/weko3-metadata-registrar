@@ -11,7 +11,7 @@ WEKOのItem TypeエクスポートとCSV/TSV形式のソースデータから、
 
 コマンドは、特に記載がない限りリポジトリルートで実行します。
 
-(0のファイルは各自でメタデータを収集してください。形式は[サンプルファイル](./sample/sourcedata_sample.tsv)をご参照ください。)
+(0のファイルは各自でメタデータを収集してください。形式は[サンプルファイル](./sample/AXIES2025/sourcedata_sample.tsv)をご参照ください。)
 
 
 ## 1. 初期設定
@@ -35,10 +35,10 @@ uv sync
 
 WEKO内でAdministration > Item Types > Metadataに移動し、Item Typeを設定してください。
 
-同梱の `sample/config/ItemType_export_sample.zip` は設定例です。WEKOにインポートして、設定ファイルとして利用できます。
+同梱の `sample/AXIES2025/config/ItemType_export_sample.zip` は設定例です。WEKOにインポートして、設定ファイルとして利用できます。
 
 
-別の項目を設定する場合は、Item Typeの設定を行ったうえで、sample/configのZIPファイルをエクスポートしたZIPへ置き換えてください。（あるいは、configの中で、参照先のファイルパスを変更してください。）
+別の項目を設定する場合は、Item Typeの設定を行ったうえで、sample/AXIES2025/configのZIPファイルをエクスポートしたZIPへ置き換えてください。（あるいは、configの中で、参照先のファイルパスを変更してください。）
 
 
 ### Index Tree の設定
@@ -50,9 +50,9 @@ WEKO内でAdministration > Index Tree > Edit Treeに移動し、Index Treeの設
 
 WEKO内でAdministration >  WorkFlow > FlowList・WorkFlow Listに移動し、WorkFlowを設定してください。
 以下が設定例です。
-![Flow List](./sample/config/img/flowlist.png)
+![Flow List](./sample/AXIES2025/config/img/flowlist.png)
 
-![WorkFlow List](./sample/config/img/workflowlist.png)
+![WorkFlow List](./sample/AXIES2025/config/img/workflowlist.png)
 
 ### 設定
 
@@ -61,7 +61,7 @@ WEKO内でAdministration >  WorkFlow > FlowList・WorkFlow Listに移動し、Wo
 ```json
 {
   "weko_base_url": "https://weko.example.org",
-  "item_type_export": "../sample/config/ItemType_export_sample.zip",
+  "item_type_export": "../sample/AXIES2025/config/ItemType_export_sample.zip",
   "indexes": {
     "Example": "1234567890"
   },
@@ -83,9 +83,10 @@ WEKO内でAdministration >  WorkFlow > FlowList・WorkFlow Listに移動し、Wo
 | `publish_date` | 必須 | `--publish-date`（後述） を省略した場合に使用する公開日。`2025-05-27` のようにゼロ埋めした `YYYY-MM-DD` 形式の実在する日付で指定する（それ以外は設定エラー） |
 | `default_languages` | 必須 | 言語子項目（`*_language`）を持つ項目の既定の言語コード（例: `en`）を、入力列名ごとに指定するオブジェクト。行ごとの言語は入力の `<列名>_lang` 列で上書きできる（後述）。タイトル項目のいずれにも、ここにも入力の `<列名>_lang` 列にも言語がなければ生成を停止する |
 | `publish_status` | 任意 | `.PUBLISH_STATUS` に設定する公開ステータス。`public`（公開、既定値）または `private`（非公開）のみ指定可能 |
+| `date_timezone` | 任意 | UTCオフセット付きの日時を日付に換算するときのタイムゾーン（IANA名）。既定値はWEKOの `BABEL_DEFAULT_TIMEZONE` と同じ `Asia/Tokyo`。未知の名前（`JST` など）は設定エラー |
 
 `Index` はメタデータの登録先となるWEKO上のコレクションです。対象WEKOのIndex管理画面で登録先のIndex名とIndexIDを確認し、`indexes` に設定してください。
-（メタデータの登録結果（[例](./sample/ResearchArtifact(40001).tsv)や、ワークフローの設定画面から確認できます）
+（メタデータの登録結果（[例](./sample/AXIES2025/ResearchArtifact(40001).tsv)や、ワークフローの設定画面から確認できます）
 
 `item_type_export` の相対パスは、`metadata_registration.json` があるディレクトリを基準に解決されます。`default_index` には、`indexes` に存在する名前を指定してください。
 
@@ -123,7 +124,7 @@ corpusid,Title,Title_g,Creator,PublicationYear_g
 
 複数の値を持つ項目は、`"['Alice', 'Bob']"` のように各要素を引用符で囲んだPython形式のリストで記述します。リストとして解釈されるのは、前後の空白を除いた値が `[` で始まり `]` で終わるセルだけです。それ以外のセル（例: `1.50`、`0x1F`、`None`、`1, 2`）は文字列としてそのまま扱われます。`[draft] Title` のようにリストとして解釈できない値も、そのまま1つの文字列になります。リストの要素に文字列以外の値（例: `[1.50]`、`[['a', 'b']]`）を含めるとエラーになるため、`"['1.50']"` のように各要素を文字列として記述してください。仕様として、すべてのセルの値とリストの各要素について、前後の空白（半角・全角スペース、タブ、改行、NBSPなど）は取り除かれます。値の途中の空白や改行はそのまま残り、空白だけのセルは空値として扱われます。リストの要素のうち `None`、空文字（`''`）、空白だけの要素は取り除かれます。たとえば `"['a', '', ' ', 'b']"` は `a` と `b` の2要素になり、`"[None]"` や `"['']"` は空のセルと同じ扱いになるため、必須（`Required`）の項目では行単位のエラーになります。複数の値を持てるのは、Item Typeで配列（`array`）型の項目です（サンプルでは `Title`、`Creator`、`Contributor`、`Subject`、`Description`）。これらの項目は値ごとに `Title[0]`、`Title[1]` ... のように列が展開されます。配列型でない項目（サンプルでは `Title_g` など）にリストを記述した場合、空でない要素が1つだけなら値として使われますが、2つ以上あると行単位のエラー（`'<列名>' accepts a single value but got N`）になります。
 
-日付の列（Item Typeで日付入力の項目）は、`T` 以降を取り除き、前後の空白を除いたうえで、`YYYY-MM-DD`、`YYYY-MM`、`YYYY` のいずれかの形式であることを検査します（例: `2020-01-02T10:00:00` や ` 2020-01-02 ` は `2020-01-02` になります）。月・日はゼロ埋めが必要で、`2020-1-2`、`2020/01/02`、存在しない日付（`2020-02-30`、`2020-13`）は行単位のエラー（`'<列名>' value '<値>' is not a WEKO date ...`）になります。この検査はWEKO自身の日付検証ルール（weko-search-ui の `validation_date_property`）と同じですが、WEKOがこのルールを適用するのは一部の日付項目だけです。そのため、WEKOでは受け付けられる、または変換される値（例: `YYYY/MM/DD`）も、このツールではエラーになることがあります。
+日付の列（Item Typeで日付入力の項目）は、前後の空白を除いて日付部分を取り出したうえで、`YYYY-MM-DD`、`YYYY-MM`、`YYYY` のいずれかの形式であることを検査します。WEKOは日付を時刻とタイムゾーンを持たない文字列として保存するため、`2020-04-02T21:11:47+00:00` や `2023-03-09T19:58:55Z` のようにUTCオフセット付きの日時は、設定の `date_timezone`（既定値 `Asia/Tokyo`）の時刻に換算してから日付を取り出します（例はそれぞれ `2020-04-03`、`2023-03-10` になります）。オフセットのない日時は換算せず `T` 以降を取り除きます（例: `2020-01-02T10:00:00` や ` 2020-01-02 ` は `2020-01-02` になります）。月・日はゼロ埋めが必要で、`2020-1-2`、`2020/01/02`、存在しない日付（`2020-02-30`、`2020-13`）は行単位のエラー（`'<列名>' value '<値>' is not a WEKO date ...`）になります。この検査はWEKO自身の日付検証ルール（weko-search-ui の `validation_date_property`）と同じですが、WEKOがこのルールを適用するのは一部の日付項目だけです。そのため、WEKOでは受け付けられる、または変換される値（例: `YYYY/MM/DD`）も、このツールではエラーになることがあります。
 
 ヘッダーにItem Typeの項目名と一致しない列があると、`warning: <path>:1: unknown column 'Titel' (did you mean 'Title'?) will be ignored` のように警告し、その列を無視して生成します。入力にない項目の中に似た項目名がある場合（大文字小文字や前後の空白の違いを含む）は候補を表示します。Item Typeの項目に対応する列が入力にない場合は `warning: <path>:1: missing column 'X'` と警告し、必須項目では末尾に `(Required)` を付けます（必須項目の列がない場合は、各行も必須項目が空のエラーになります）。Item Typeにない識別用の列などを意図して含めている場合、この警告は無視して構いません。`--strict-columns` を指定すると、未知の列があるときは警告ではなく、すべての未知の列を列挙して生成を停止します（不足している列は引き続き警告のみです）。`invalid_rows.tsv` の `_invalid_row` と `_invalid_reason` の列と、列名が空の列（pandasで保存したCSVのインデックス列など）は未知の列として扱わず、警告もエラーも出しません。
 
@@ -133,7 +134,7 @@ WEKOは、JPCOARのタイトル（`title`、言語属性付き）にマッピン
 
 出力TSVの1つのセルに入る値は131,072文字までです。WEKOはTSVの読み込み時にこれより長いセルを受け付けず、そのTSVのすべてのレコードが取り込めなくなるためです。リストの場合は要素ごとに数えます。この上限を超える値があると、生成はファイル名・行番号・列名を表示して停止します。行単位のエラー（`path:行番号:` 形式）の行番号はヘッダーを1行目として数えたレコード番号で、セル内に改行がある場合は物理的な行番号と一致しないことがあります。CSV/TSVとして読み取れない入力のエラー（`path: line N:` 形式）には物理的な行番号が表示されます。
 
-サンプルファイルは[こちら](./sample/sourcedata_sample.tsv)
+サンプルファイルは[こちら](./sample/AXIES2025/sourcedata_sample.tsv)
 
 ## メタデータファイルの生成
 
@@ -166,6 +167,8 @@ uv run python src/scripts/generate_metadata_imports.py \
 | `--overwrite` | 任意 | 無効 | 出力先にある既存の生成ファイルをすべて削除してから生成する |
 | `--skip-invalid-rows` | 任意 | 無効 | エラーのある行を除外して生成し、除外した行を `invalid_rows.tsv` に出力する |
 | `--strict-columns` | 任意 | 無効 | Item Typeにない列が入力にある場合、警告ではなくエラーとして停止する |
+| `--title-fallback LABEL=COLUMN` | 任意 | なし | タイトル項目が空の行を `<接頭辞> (LABEL: <COLUMNの値>)` で埋める。複数指定すると指定順に試す（後述） |
+| `--title-fallback-prefix TEXT` | 任意 | `NoTitle` | `--title-fallback` で埋めるタイトルの接頭辞 |
 
 `--delimiter auto` では、拡張子が `.tsv` ならタブ、`.csv` ならカンマとして読み込みます。それ以外の拡張子（`.txt` や拡張子なしなど）では、ヘッダー行（1行目）のタブとカンマの数で判定し、タブの方が多ければタブ、それ以外はカンマとして扱います。ヘッダーにItem Typeの項目名と一致する列が1つもない場合は、区切り文字の誤りとみなして生成を停止します。拡張子と実際の区切り文字が異なるファイル（例: タブ区切りの `.csv`）は `--delimiter tab` のように明示してください。
 
@@ -178,6 +181,18 @@ uv run python src/scripts/generate_metadata_imports.py \
 除外した行を登録し直すときは、`invalid_rows.tsv` の値を修正し、修正した行だけを入力として再実行してください。元の入力ファイルで再実行すると、生成済みのZIPで登録した行が重複して登録されます。`invalid_rows.tsv` はそのまま `--input` に指定できます（`_invalid_row` と `_invalid_reason` の列は生成時に無視されます）。出力先に前回の `invalid_rows.tsv` が残っていると生成は停止するため、移動・削除するか `--overwrite` を指定してください。`--input` に指定したファイルは、出力先にあっても `--overwrite` で削除されません。ただし修正後もエラーが残る行がある場合、そのファイルは新しい `invalid_rows.tsv` で上書きされます。
 
 エラーのある行がない場合、`invalid_rows.tsv` は作成されません。すべての行にエラーがある場合は `invalid_rows.tsv` だけを書き出し、TSV/ZIPは生成せずに終了コード1で終了します。このとき `--overwrite` を指定していても、前回生成したTSV/ZIPは削除されず、前回の `invalid_rows.tsv` だけが置き換えられます。
+
+`--title-fallback` を指定すると、タイトル項目が空（空白だけのセルや、`[]`・`['']`・`[None]` のように空でない要素がないリストを含む。必須項目の空判定と同じ）の行を、指定した列の値で埋めます。対象はJPCOARのタイトルにマッピングされた非表示でない項目のうち、Item Typeで最初の項目です（サンプルでは `Title`）。指定した順に列を調べ、最初に値のある列の最初の要素を使って `<接頭辞> (LABEL: <値>)` とします。たとえば次の指定では、`Title_r` があれば `NoTitle (R: DNAxiS)`、なければ `NoTitle (G: dnaxis)` になります。LLMなどでタイトルを生成できなかったレコードを、`NoTitle` で検索して特定できます。
+
+```shell
+uv run python src/scripts/generate_metadata_imports.py \
+  --input path/to/input.tsv \
+  --output-dir output/zip_data \
+  --title-fallback R=Title_r \
+  --title-fallback G=Title_g
+```
+
+すべてのTSV/ZIPを書き出した後に、埋めた行を `filled title: <path>:<行番号>: <タイトル>` と表示し、最後に件数を表示します（エラーのある行があって生成を停止した場合や、書き出しの途中でエラーになった場合は表示しません。`--skip-invalid-rows` では除外されなかった行だけを表示します）。埋めたタイトルの言語は、通常の値と同じく `<列名>_lang` 列または `default_languages` から決まります。指定する列はItem Typeの項目でなくても構いません。Item Typeにない列でも未知の列として警告されず、`--strict-columns` でも停止しません。指定した列が入力のヘッダーにない場合は、行を読む前に生成を停止します。どの列にも値がない行は埋めず、従来どおり必須項目が空の行単位のエラーになります。`invalid_rows.tsv` には埋める前の入力値を出力します。
 
 `--chunk-size`は一括登録時のエラー回避のためのものです。[v1.0.8の修正](https://nii-auth.atlassian.net/wiki/spaces/JAIROCloudWEKO3/pages/43549582/2025-07-02+v1.0.8)によって改修されたと思われますが、設定する事をお勧めします。
 
@@ -305,7 +320,7 @@ WEKO上の既存アイテムを識別子（`corpusid` など）で検索して�
 
 ### 登録後のファイル
 
-インポートが完了すると、WEKOのResultタブからダウンロードした結果ファイル（TSV、またはWEKOの設定によりCSV）を `output/import_results` に保存し、その内容を検証します。次の条件をすべて満たす場合だけ、ZIPの登録に成功したとみなします。
+インポートが完了すると、WEKOのResultタブからダウンロードした結果ファイル（TSV、またはWEKOの設定によりCSV）を `output/import_results`（`--download-dir` で変更可能）に保存し、その内容を検証します。結果ファイルはZIPと対応が取れるように `<ZIP名>_result.tsv`（例: `import_001.zip` なら `import_001_result.tsv`）へ名前を変更します。同名のファイルがある場合は `import_001_result_001.tsv` のように連番を付け、上書きしません。インポート台帳の `result_path` には変更後のパスを記録します。次の条件をすべて満たす場合だけ、ZIPの登録に成功したとみなします。
 
 - 結果ファイルに1行以上のレコードがある
 - 結果ファイルのレコード数が、ZIP内のTSVに含まれるデータ行数（先頭セルが `#` で始まらない行）と一致する
@@ -321,9 +336,20 @@ WEKO上の既存アイテムを識別子（`corpusid` など）で検索して�
 
 `--delete-zip-after-import` による削除は元に戻せません。`--keep-zip-after-import` と `--delete-zip-after-import` は同時に指定できず、両方を指定するとコマンドはエラーで終了します（`WekoImportConfig` で両方を有効にして `run_import` を呼んだ場合も、ZIPを処理する前に `ValueError` になります）。
 
-失敗行がある場合、件数が一致しない場合、または結果ファイルを解析できない場合は、上記のオプションにかかわらずZIPを削除せず、元のディレクトリにも残さずに `output/failed_zip_data`（`--failed-zip-dir` で変更可能）へ移動します。同名のファイルがある場合は連番を付けて移動します。このとき成功件数・失敗件数・期待件数と、失敗行（最大20行）の No.、Item ID、ステータス、インポート結果を表示し、`ImportResultError` で処理を中断します。この場合は再試行しません。一部のレコードがすでに登録されている可能性があるため、WEKO上の登録状況と結果ファイルを確認してから、必要なレコードだけを再投入してください。
+失敗行がある場合、件数が一致しない場合、または結果ファイルを解析できない場合は、上記のオプションにかかわらずZIPを削除せず、元のディレクトリにも残さずに `output/failed_zip_data`（`--failed-zip-dir` で変更可能）へ移動します。同名のファイルがある場合は連番を付けて移動します。このとき成功件数・失敗件数・期待件数と、失敗行（最大20行）の No.、Item ID、ステータス、インポート結果を表示し、`ImportResultError` で処理を中断します。この場合は再試行しません。
 
-コンソールに `imported=<zip-path> result=<download-path>` が表示され、結果ファイルが保存されていることを確認してください。登録対象がない場合は `No zip files were found to import.` と表示して終了します。登録対象のZIPがあっても `--limit 0` を指定した場合は、`No zip files were imported because --limit 0 was given.` と表示して終了します。登録対象のZIPがすべて台帳によりスキップされた場合は、`No zip files were imported; <件数> zip file(s) were skipped because they are already in the import ledger.` と表示して終了します。
+結果ファイルで失敗（ステータスが `Done`/`完了` かつ結果が `Success`/`成功` 以外）となったレコードは、移動したZIPと同じディレクトリに `<ZIP名>_failed_rows.tsv`（例: `import_001_failed_rows.tsv`）として書き出し、`failed rows: <件数> row(s) written to <パス>` と表示します。このファイルはZIP内のTSVのヘッダー5行と失敗したレコードの行だけからなるWEKOインポート形式のTSV（UTF-8 BOM付き）で、結果ファイルの No. をZIP内のTSVのデータ行の順番（1始まり）として対応付けています。WEKOは失敗したレコードの登録を取り消すため（通常は登録されていません）、値を修正したうえで `data/` 配下に置いたZIPにすれば、そのレコードだけを再投入できます。
+
+```shell
+cd output/failed_zip_data
+mkdir -p retry/data
+cp import_001_failed_rows.tsv retry/data/output_write.tsv
+(cd retry && python -m zipfile -c ../import_001_retry.zip data)
+```
+
+結果ファイルの行数がZIP内のレコード数と一致しない場合は、失敗行ファイルを作成せず `could not write failed rows: ... cannot be matched to records` と表示します。WEKOは取り込み対象から外したレコードを詰めて番号を振るため、件数が一致しないと No. とレコードの対応が取れないからです。この場合と結果ファイルを解析できない場合は、WEKO上の登録状況と結果ファイルを確認してから、必要なレコードだけを再投入してください。失敗行ファイルと同名のファイルがすでにある場合は、上書きせず `import_001_failed_rows_001.tsv` のように連番を付けます。
+
+コンソールに `imported=<zip-path> result=<結果ファイルのパス>` が表示され、結果ファイルが保存されていることを確認してください。登録対象がない場合は `No zip files were found to import.` と表示して終了します。登録対象のZIPがあっても `--limit 0` を指定した場合は、`No zip files were imported because --limit 0 was given.` と表示して終了します。登録対象のZIPがすべて台帳によりスキップされた場合は、`No zip files were imported; <件数> zip file(s) were skipped because they are already in the import ledger.` と表示して終了します。
 
 ## 生成物の仕様
 

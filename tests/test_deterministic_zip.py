@@ -21,7 +21,9 @@ from generation.metadata_pipeline import (
 from importers.import_ledger import STATUS_SUCCEEDED, ImportLedger, file_sha256
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-SAMPLE_EXPORT = REPOSITORY_ROOT / "sample" / "config" / "ItemType_export_sample.zip"
+SAMPLE_EXPORT = (
+    REPOSITORY_ROOT / "sample" / "AXIES2025" / "config" / "ItemType_export_sample.zip"
+)
 # 2026-08-23 12:34:57 UTC; ZIP stores it rounded down to 12:34:56.
 INPUT_MTIME = calendar.timegm((2026, 8, 23, 12, 34, 57))
 FIELDNAMES = ["corpusid", "Title", "Title_g", "Creator", "PublicationYear_g"]

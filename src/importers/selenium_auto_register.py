@@ -51,6 +51,7 @@ from importers.import_result import (
     ImportResultError,
     ImportResultSummary,
     summarize_import_result,
+    write_failed_rows,
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -82,6 +83,10 @@ MAX_REPORTED_CHECK_ERROR_ROWS = 20
 POLL_INTERVAL_SECONDS = 2
 ELEMENT_POLL_INTERVAL_SECONDS = 0.5
 RESULT_FILE_PREFIX = "List_Download_"
+# Saved results and failed rows are named after the ZIP, e.g. import_001.zip
+# -> import_001_result.tsv and import_001_failed_rows.tsv.
+RESULT_FILE_NAME_SUFFIX = "_result"
+FAILED_ROWS_FILE_NAME_SUFFIX = "_failed_rows.tsv"
 PARTIAL_DOWNLOAD_SUFFIXES = (".crdownload", ".tmp", ".part")
 MAX_IMPORT_ATTEMPTS = 4
 DRIVER_RETRY_DELAY_SECONDS = 4
@@ -605,6 +610,46 @@ def unique_destination_path(destination_dir: Path, original_name: str) -> Path:
     )
 
 
+def store_result_file(downloaded_file: Path, zip_path: Path) -> Path:
+    """Rename a downloaded result after its ZIP so the two can be matched.
+
+    A failed rename keeps the downloaded name: the ledger still holds only a
+    blocking "started" entry here, so the result must still be verified.
+    """
+    try:
+        destination = unique_destination_path(
+            downloaded_file.parent,
+            f"{zip_path.stem}{RESULT_FILE_NAME_SUFFIX}{downloaded_file.suffix}",
+        )
+        downloaded_file.rename(destination)
+    except (OSError, RuntimeError) as exc:
+        print(
+            f"warning: could not rename {downloaded_file} after {zip_path.name}: "
+            f"{type(exc).__name__}: {exc}"
+        )
+        return downloaded_file
+    return destination
+
+
+def save_failed_rows(
+    failed_zip_path: Path, summary: ImportResultSummary, prefix: str
+) -> Path | None:
+    """Write failed records next to the failed ZIP; report, never raise."""
+    try:
+        # Never overwrite a failed-rows file the user may be editing.
+        output_path = unique_destination_path(
+            failed_zip_path.parent,
+            f"{failed_zip_path.stem}{FAILED_ROWS_FILE_NAME_SUFFIX}",
+        )
+        written = write_failed_rows(failed_zip_path, summary, output_path)
+    except Exception as exc:
+        print(f"{prefix} could not write failed rows: {type(exc).__name__}: {exc}")
+        return None
+    if written:
+        print(f"{prefix} failed rows: {written} row(s) written to {output_path}")
+    return output_path if written else None
+
+
 def finalize_imported_zip(zip_path: Path, config: WekoImportConfig) -> Path | None:
     if config.delete_zip_after_import:
         zip_path.unlink()
@@ -948,6 +993,7 @@ def run_import(config: WekoImportConfig) -> ImportRunResults:
                 raise last_error
         if downloaded_file is None:
             raise RuntimeError(f"Import did not produce a result file for {zip_path}")
+        downloaded_file = store_result_file(downloaded_file, zip_path)
 
         summary, parse_error = verify_import_result(zip_path, downloaded_file)
         if summary is None or not summary.succeeded:
@@ -970,6 +1016,8 @@ def run_import(config: WekoImportConfig) -> ImportRunResults:
                 for line in summary.describe():
                     print(f"[{index}/{total}] result: {line}")
             print(f"[{index}/{total}] moved={zip_path} -> {failed_zip_path}")
+            if summary is not None:
+                save_failed_rows(failed_zip_path, summary, f"[{index}/{total}]")
             raise ImportResultError(
                 f"WEKO import result for {zip_path} was not fully successful; "
                 f"zip moved to {failed_zip_path}; result={downloaded_file}"

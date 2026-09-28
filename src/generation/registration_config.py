@@ -5,9 +5,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 PUBLISH_STATUSES = ("public", "private")
 DEFAULT_PUBLISH_STATUS = "public"
+# Matches WEKO's BABEL_DEFAULT_TIMEZONE, which decides the calendar day.
+DEFAULT_DATE_TIMEZONE = "Asia/Tokyo"
 
 
 class RegistrationConfigError(ValueError):
@@ -23,6 +26,7 @@ class RegistrationSettings:
     publish_date: str
     default_languages: dict[str, str]
     publish_status: str = DEFAULT_PUBLISH_STATUS
+    date_timezone: ZoneInfo = ZoneInfo(DEFAULT_DATE_TIMEZONE)
 
     def resolve_index(self, index_name: str | None = None) -> tuple[str, str]:
         selected_name = index_name or self.default_index
@@ -55,6 +59,19 @@ def validate_publish_date(value: str, source: str = "publish_date") -> str:
             "as YYYY-MM-DD, e.g. 2025-05-27"
         )
     return value
+
+
+def validate_date_timezone(value: object, source: str = "date_timezone") -> ZoneInfo:
+    if not isinstance(value, str) or not value:
+        raise RegistrationConfigError(
+            f"{source} must be a non-empty IANA time zone name, e.g. Asia/Tokyo"
+        )
+    try:
+        return ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise RegistrationConfigError(
+            f"{source} {value!r} is not a known IANA time zone, e.g. Asia/Tokyo"
+        ) from exc
 
 
 def _string_mapping(raw: dict[str, Any], key: str) -> dict[str, str]:
@@ -122,5 +139,8 @@ def load_registration_settings(config_path: Path) -> RegistrationSettings:
         default_languages=_string_mapping(raw, "default_languages"),
         publish_status=validate_publish_status(
             raw.get("publish_status", DEFAULT_PUBLISH_STATUS)
+        ),
+        date_timezone=validate_date_timezone(
+            raw.get("date_timezone", DEFAULT_DATE_TIMEZONE)
         ),
     )

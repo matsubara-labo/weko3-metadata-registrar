@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from generation.registration_config import (
     RegistrationConfigError,
@@ -16,14 +17,18 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 class RegistrationConfigTests(unittest.TestCase):
     def test_named_index_resolves_its_configured_id(self) -> None:
         settings = load_registration_settings(
-            REPOSITORY_ROOT / "config" / "metadata_registration.json"
+            REPOSITORY_ROOT / "sample" / "AXIES2025" / "metadata_registration.json"
         )
 
         self.assertEqual(settings.resolve_index("PWCD"), ("1776751280302", "PWCD"))
         self.assertEqual(
             settings.item_type_export_path.resolve(),
             (
-                REPOSITORY_ROOT / "sample" / "config" / "ItemType_export_sample.zip"
+                REPOSITORY_ROOT
+                / "sample"
+                / "AXIES2025"
+                / "config"
+                / "ItemType_export_sample.zip"
             ).resolve(),
         )
 
@@ -61,6 +66,20 @@ class RegistrationConfigTests(unittest.TestCase):
             with self.subTest(status=status):
                 with self.assertRaisesRegex(RegistrationConfigError, "publish_status"):
                     self.load_with(publish_status=status)
+
+    def test_date_timezone_defaults_to_japan(self) -> None:
+        self.assertEqual(self.load_with().date_timezone, ZoneInfo("Asia/Tokyo"))
+
+    def test_date_timezone_accepts_iana_names(self) -> None:
+        self.assertEqual(
+            self.load_with(date_timezone="UTC").date_timezone, ZoneInfo("UTC")
+        )
+
+    def test_invalid_date_timezone_is_rejected(self) -> None:
+        for value in ("JST", "Asia/Nowhere", "", 9):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(RegistrationConfigError, "date_timezone"):
+                    self.load_with(date_timezone=value)
 
 
 if __name__ == "__main__":

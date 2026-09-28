@@ -9,7 +9,9 @@ from pathlib import Path
 from generation.item_type import ItemTypeExportError, load_item_type_export
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-SAMPLE_EXPORT = REPOSITORY_ROOT / "sample" / "config" / "ItemType_export_sample.zip"
+SAMPLE_EXPORT = (
+    REPOSITORY_ROOT / "sample" / "AXIES2025" / "config" / "ItemType_export_sample.zip"
+)
 
 
 def write_minimal_export(export_path: Path, item_type: dict) -> None:

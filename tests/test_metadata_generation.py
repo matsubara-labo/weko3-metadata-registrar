@@ -25,7 +25,9 @@ from generation.registration_config import RegistrationConfigError
 from scripts.generate_metadata_imports import build_parser as build_generation_parser
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-SAMPLE_EXPORT = REPOSITORY_ROOT / "sample" / "config" / "ItemType_export_sample.zip"
+SAMPLE_EXPORT = (
+    REPOSITORY_ROOT / "sample" / "AXIES2025" / "config" / "ItemType_export_sample.zip"
+)
 
 
 class MetadataGenerationFromExportTests(unittest.TestCase):
@@ -35,7 +37,10 @@ class MetadataGenerationFromExportTests(unittest.TestCase):
                 input_path=Path("unused.csv"),
                 output_dir=Path("unused-output"),
                 registration_config_path=(
-                    REPOSITORY_ROOT / "config" / "metadata_registration.json"
+                    REPOSITORY_ROOT
+                    / "sample"
+                    / "AXIES2025"
+                    / "metadata_registration.json"
                 ),
             )
         )

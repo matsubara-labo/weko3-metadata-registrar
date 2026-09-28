@@ -16,7 +16,9 @@ from generation.metadata_pipeline import (
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-SAMPLE_EXPORT = REPOSITORY_ROOT / "sample" / "config" / "ItemType_export_sample.zip"
+SAMPLE_EXPORT = (
+    REPOSITORY_ROOT / "sample" / "AXIES2025" / "config" / "ItemType_export_sample.zip"
+)
 FIELDNAMES = ["corpusid", "Title", "Title_g", "Creator", "PublicationYear_g"]
 
 

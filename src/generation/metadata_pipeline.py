@@ -8,10 +8,11 @@ import re
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 from enum import Enum, auto
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .item_type import (
     ItemTypeField,
@@ -19,6 +20,7 @@ from .item_type import (
     load_item_type_export,
 )
 from .registration_config import (
+    DEFAULT_DATE_TIMEZONE,
     load_registration_settings,
     validate_publish_date,
     validate_publish_status,
@@ -131,6 +133,7 @@ ZIP_MEMBER_EXTERNAL_ATTR = 0o644 << 16
 # Optional input column giving a row's language for a field with a language child.
 LANGUAGE_COLUMN_SUFFIX = "_lang"
 WEKO_TITLE_ERROR = "Title is required item."
+DEFAULT_TITLE_FALLBACK_PREFIX = "NoTitle"
 
 # Largest limit accepted on every platform (sys.maxsize overflows on Windows).
 INPUT_FIELD_SIZE_LIMIT = 2**31 - 1
@@ -196,6 +199,7 @@ def language_column(field_name: str) -> str:
 class _MetadataRuntime:
     schema: MetadataSchema
     date_like_fields: frozenset[str]
+    date_timezone: tzinfo
 
 
 @dataclass(frozen=True)
@@ -213,6 +217,18 @@ class MetadataGenerationConfig:
     overwrite: bool = False
     skip_invalid_rows: bool = False
     strict_columns: bool = False
+    # (label, column) pairs tried in order when the title field is empty.
+    title_fallbacks: tuple[tuple[str, str], ...] = ()
+    title_fallback_prefix: str = DEFAULT_TITLE_FALLBACK_PREFIX
+
+
+@dataclass(frozen=True)
+class TitleFallback:
+    """Fill an empty title field with "<prefix> (<label>: <value>)"."""
+
+    field_name: str
+    sources: tuple[tuple[str, str], ...]
+    prefix: str = DEFAULT_TITLE_FALLBACK_PREFIX
 
 
 @dataclass(frozen=True)
@@ -318,6 +334,7 @@ def _build_metadata_runtime(config: MetadataGenerationConfig) -> _MetadataRuntim
         date_like_fields=frozenset(
             field.name for field in item_type.fields if field.date_like
         ),
+        date_timezone=settings.date_timezone,
     )
 
 
@@ -354,8 +371,30 @@ def resolve_fixed_field_values(field: ItemTypeField, *, publish_date: str) -> li
     return [""] * len(field.values)
 
 
-def process_date(date_str: str) -> str:
-    return date_str.split("T", 1)[0]
+DEFAULT_DATE_TZINFO = ZoneInfo(DEFAULT_DATE_TIMEZONE)
+
+
+def process_date(date_str: str, date_timezone: tzinfo = DEFAULT_DATE_TZINFO) -> str:
+    """Reduce a date or datetime to the calendar date WEKO stores.
+
+    A datetime with a UTC offset is an instant, so it is converted to
+    ``date_timezone`` before its date is taken; otherwise the part after ``T``
+    is dropped as is.
+    """
+    date_part, separator, _ = date_str.partition("T")
+    if not separator:
+        return date_str
+    try:
+        moment = datetime.fromisoformat(date_str)
+    except ValueError:
+        return date_part
+    if moment.utcoffset() is None:
+        return date_part
+    try:
+        return moment.astimezone(date_timezone).date().isoformat()
+    except OverflowError:
+        # Out of datetime's range after conversion; reject it as a non-date.
+        return date_str
 
 
 WEKO_DATE_FORMATS = ("%Y-%m-%d", "%Y-%m", "%Y")
@@ -371,8 +410,10 @@ def is_weko_date(value: str) -> bool:
     return False
 
 
-def normalize_date(field_name: str, value: str) -> str:
-    date = process_date(value).strip()
+def normalize_date(
+    field_name: str, value: str, date_timezone: tzinfo = DEFAULT_DATE_TZINFO
+) -> str:
+    date = process_date(value.strip(), date_timezone).strip()
     if not is_weko_date(date):
         raise MetadataInputError(
             f"{field_name!r} value {value!r} is not a WEKO date "
@@ -479,10 +520,78 @@ def _has_value_with_language(
     return any(value and language for value, language in zip(values, languages))
 
 
+def build_title_fallback(
+    schema: MetadataSchema,
+    sources: tuple[tuple[str, str], ...],
+    prefix: str = DEFAULT_TITLE_FALLBACK_PREFIX,
+) -> TitleFallback | None:
+    """Target the first non-hidden title field in ItemType order."""
+    if not sources:
+        return None
+    labels = [label for label, _ in sources]
+    for label, column in sources:
+        if not label.strip() or not column.strip():
+            raise MetadataInputError(
+                f"--title-fallback {label}={column}: label and column must not be empty"
+            )
+    if len(set(labels)) != len(labels):
+        raise MetadataInputError(
+            f"--title-fallback labels must be unique, got {', '.join(labels)}"
+        )
+    field_name = next(
+        (name for name in schema.column_bindings if name in schema.title_fields), None
+    )
+    if field_name is None:
+        raise MetadataInputError(
+            "--title-fallback needs a non-hidden ItemType field mapped to the "
+            "JPCOAR title, but the ItemType has none"
+        )
+    return TitleFallback(field_name=field_name, sources=sources, prefix=prefix)
+
+
+def check_title_fallback_columns(
+    input_path: Path, fieldnames: list[str], fallback: TitleFallback
+) -> None:
+    present = set(fieldnames)
+    missing = [column for _, column in fallback.sources if column not in present]
+    if missing:
+        raise MetadataInputError(
+            f"{input_path}:1: --title-fallback column(s) not in the input: "
+            f"{', '.join(repr(column) for column in missing)}"
+        )
+
+
+def _non_empty_values(raw_value: Any) -> list[str]:
+    return [value for value in parse_literal_list(raw_value) if value.strip()]
+
+
+def fill_missing_title(
+    source_row: dict[str, Any], fallback: TitleFallback
+) -> str | None:
+    """Return the fallback title for a row whose title field is empty.
+
+    Returns None when the title has a value or no fallback column has one.
+    """
+    try:
+        if _non_empty_values(source_row.get(fallback.field_name, "")):
+            return None
+    except MetadataInputError as exc:
+        raise MetadataInputError(f"{fallback.field_name!r}: {exc}") from exc
+    for label, column in fallback.sources:
+        try:
+            values = _non_empty_values(source_row.get(column, ""))
+        except MetadataInputError as exc:
+            raise MetadataInputError(f"{column!r}: {exc}") from exc
+        if values:
+            return f"{fallback.prefix} ({label}: {values[0]})"
+    return None
+
+
 def normalize_row(
     source_row: dict[str, Any],
     schema: MetadataSchema,
     date_like_fields: frozenset[str] = frozenset(),
+    date_timezone: tzinfo = DEFAULT_DATE_TZINFO,
 ) -> dict[str, str | list[str]]:
     normalized: dict[str, str | list[str]] = {}
     for field_name in schema.column_bindings:
@@ -499,7 +608,9 @@ def normalize_row(
                 f"{field_name!r} accepts a single value but got {len(values)}"
             )
         if field_name in date_like_fields:
-            values = [normalize_date(field_name, value) for value in values]
+            values = [
+                normalize_date(field_name, value, date_timezone) for value in values
+            ]
         if repeatable:
             normalized[field_name] = values
         else:
@@ -579,6 +690,7 @@ def check_columns(
     schema: MetadataSchema,
     *,
     strict: bool = False,
+    extra_known_columns: frozenset[str] = frozenset(),
 ) -> list[str]:
     field_names = list(schema.column_bindings)
     language_columns = {language_column(name) for name in schema.language_fields}
@@ -591,6 +703,7 @@ def check_columns(
             name in schema.column_bindings
             or name in language_columns
             or name in INVALID_ROWS_REPORT_COLUMNS
+            or name in extra_known_columns  # e.g. --title-fallback sources
             or not name.strip()  # unnamed, e.g. a pandas index column
         ):
             continue
@@ -672,6 +785,9 @@ def load_rows(
     *,
     strict_columns: bool = False,
     on_warning: Callable[[str], None] | None = None,
+    title_fallback: TitleFallback | None = None,
+    on_title_filled: Callable[[int, str], None] | None = None,
+    date_timezone: tzinfo = DEFAULT_DATE_TZINFO,
 ) -> list[dict[str, Any]]:
     rows, errors = load_rows_with_errors(
         input_path,
@@ -680,6 +796,9 @@ def load_rows(
         delimiter,
         strict_columns=strict_columns,
         on_warning=on_warning,
+        title_fallback=title_fallback,
+        on_title_filled=on_title_filled,
+        date_timezone=date_timezone,
     )
     if errors:
         raise MetadataInputError(format_row_errors(input_path, errors))
@@ -694,6 +813,9 @@ def load_rows_with_errors(
     *,
     strict_columns: bool = False,
     on_warning: Callable[[str], None] | None = None,
+    title_fallback: TitleFallback | None = None,
+    on_title_filled: Callable[[int, str], None] | None = None,
+    date_timezone: tzinfo = DEFAULT_DATE_TZINFO,
 ) -> tuple[list[dict[str, Any]], list[RowError]]:
     if not input_path.exists():
         raise FileNotFoundError(f"Input file was not found: {input_path}")
@@ -715,10 +837,19 @@ def load_rows_with_errors(
                         list(reader.fieldnames),
                         schema,
                         strict=strict_columns,
+                        extra_known_columns=frozenset(
+                            column for _, column in title_fallback.sources
+                        )
+                        if title_fallback is not None
+                        else frozenset(),
                     )
                     warnings.extend(
                         check_languages(input_path, list(reader.fieldnames), schema)
                     )
+                    if title_fallback is not None:
+                        check_title_fallback_columns(
+                            input_path, list(reader.fieldnames), title_fallback
+                        )
                     if on_warning is not None:
                         for warning in warnings:
                             on_warning(warning)
@@ -727,7 +858,25 @@ def load_rows_with_errors(
                 errors: list[RowError] = []
                 for row_number, row in enumerate(reader, start=2):
                     try:
-                        rows.append(normalize_row(row, schema, date_like_fields))
+                        source_row = row
+                        filled = (
+                            fill_missing_title(row, title_fallback)
+                            if title_fallback is not None
+                            else None
+                        )
+                        if filled is not None:
+                            # Keep `row` untouched so invalid_rows.tsv shows the input.
+                            source_row = {
+                                **row,
+                                title_fallback.field_name: repr([filled]),
+                            }
+                        rows.append(
+                            normalize_row(
+                                source_row, schema, date_like_fields, date_timezone
+                            )
+                        )
+                        if filled is not None and on_title_filled is not None:
+                            on_title_filled(row_number, filled)
                     except MetadataInputError as exc:
                         cells = {name: row.get(name) or "" for name in fieldnames}
                         errors.append(RowError(row_number, str(exc), cells))
@@ -943,6 +1092,7 @@ def generate_metadata_artifacts(
     on_remove: Callable[[Path], None] | None = None,
     on_invalid_rows: Callable[[Path, int], None] | None = None,
     on_warning: Callable[[str], None] | None = None,
+    on_title_filled: Callable[[int, str], None] | None = None,
 ) -> list[GeneratedArtifact]:
     existing = find_generated_artifacts(config.output_dir)
     if existing and not config.overwrite:
@@ -952,6 +1102,10 @@ def generate_metadata_artifacts(
 
     runtime = _build_metadata_runtime(config)
     schema = runtime.schema
+    title_fallback = build_title_fallback(
+        schema, config.title_fallbacks, config.title_fallback_prefix
+    )
+    filled_titles: list[tuple[int, str]] = []
     rows, errors = load_rows_with_errors(
         config.input_path,
         schema,
@@ -959,6 +1113,9 @@ def generate_metadata_artifacts(
         resolve_delimiter(config.delimiter),
         strict_columns=config.strict_columns,
         on_warning=on_warning,
+        title_fallback=title_fallback,
+        on_title_filled=lambda row, title: filled_titles.append((row, title)),
+        date_timezone=runtime.date_timezone,
     )
     if errors and not config.skip_invalid_rows:
         raise MetadataInputError(format_row_errors(config.input_path, errors))
@@ -1018,6 +1175,11 @@ def generate_metadata_artifacts(
             )
         )
 
+    # Report fills only after every TSV/ZIP has been written, so a later
+    # I/O error never leaves "filled title" lines for files that do not exist.
+    if on_title_filled is not None:
+        for row_number, title in filled_titles:
+            on_title_filled(row_number, title)
     return artifacts
 
 
