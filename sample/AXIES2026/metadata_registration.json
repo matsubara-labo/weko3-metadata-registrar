@@ -1,6 +1,6 @@
 {
   "weko_base_url": "https://scholar.jp",
-  "item_type_export": "../sample/AXIES2026/config/ItemType_export.zip",
+  "item_type_export": "config/ItemType_export.zip",
   "indexes": {
     "S2ORC_README": "1790570897440"
   },

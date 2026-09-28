@@ -7,7 +7,10 @@ from .metadata_pipeline import MetadataGenerationConfig
 
 def build_single_file_export_config(base_dir: Path) -> MetadataGenerationConfig:
     return MetadataGenerationConfig(
-        input_path=base_dir / "source_data" / "chunk25_single-url_safe_utf-8.tsv",
+        input_path=base_dir
+        / "source_data"
+        / "AXIES2025"
+        / "chunk25_single-url_safe_utf-8.tsv",
         output_dir=base_dir / "output",
         index_name=None,
         publish_date=None,
@@ -19,7 +22,7 @@ def build_single_file_export_config(base_dir: Path) -> MetadataGenerationConfig:
 
 def build_chunked_zip_export_config(base_dir: Path) -> MetadataGenerationConfig:
     return MetadataGenerationConfig(
-        input_path=base_dir / "source_data" / "sample.csv",
+        input_path=base_dir / "source_data" / "AXIES2025" / "sample.csv",
         output_dir=base_dir / "output" / "zip_data",
         index_name=None,
         publish_date=None,

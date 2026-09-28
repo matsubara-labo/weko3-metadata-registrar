@@ -25,7 +25,9 @@ from generation.registration_config import (
 from scripts import generate_metadata_imports
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-SAMPLE_EXPORT = REPOSITORY_ROOT / "sample" / "config" / "ItemType_export_sample.zip"
+SAMPLE_EXPORT = (
+    REPOSITORY_ROOT / "sample" / "AXIES2025" / "config" / "ItemType_export_sample.zip"
+)
 
 
 def _schema() -> MetadataSchema:

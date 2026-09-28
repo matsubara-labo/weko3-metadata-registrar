@@ -71,7 +71,9 @@ def _write_export(
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-SAMPLE_EXPORT = REPOSITORY_ROOT / "sample" / "config" / "ItemType_export_sample.zip"
+SAMPLE_EXPORT = (
+    REPOSITORY_ROOT / "sample" / "AXIES2025" / "config" / "ItemType_export_sample.zip"
+)
 TITLE_LANGUAGE = ".metadata.item_30001_title0[0].subitem_title_language"
 ALTERNATIVE_LANGUAGE_SUFFIX = ".subitem_alternative_title_language"
 

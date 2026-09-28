@@ -11,7 +11,7 @@ WEKOのItem TypeエクスポートとCSV/TSV形式のソースデータから、
 
 コマンドは、特に記載がない限りリポジトリルートで実行します。
 
-(0のファイルは各自でメタデータを収集してください。形式は[サンプルファイル](./sample/sourcedata_sample.tsv)をご参照ください。)
+(0のファイルは各自でメタデータを収集してください。形式は[サンプルファイル](./sample/AXIES2025/sourcedata_sample.tsv)をご参照ください。)
 
 
 ## 1. 初期設定
@@ -35,10 +35,10 @@ uv sync
 
 WEKO内でAdministration > Item Types > Metadataに移動し、Item Typeを設定してください。
 
-同梱の `sample/config/ItemType_export_sample.zip` は設定例です。WEKOにインポートして、設定ファイルとして利用できます。
+同梱の `sample/AXIES2025/config/ItemType_export_sample.zip` は設定例です。WEKOにインポートして、設定ファイルとして利用できます。
 
 
-別の項目を設定する場合は、Item Typeの設定を行ったうえで、sample/configのZIPファイルをエクスポートしたZIPへ置き換えてください。（あるいは、configの中で、参照先のファイルパスを変更してください。）
+別の項目を設定する場合は、Item Typeの設定を行ったうえで、sample/AXIES2025/configのZIPファイルをエクスポートしたZIPへ置き換えてください。（あるいは、configの中で、参照先のファイルパスを変更してください。）
 
 
 ### Index Tree の設定
@@ -50,9 +50,9 @@ WEKO内でAdministration > Index Tree > Edit Treeに移動し、Index Treeの設
 
 WEKO内でAdministration >  WorkFlow > FlowList・WorkFlow Listに移動し、WorkFlowを設定してください。
 以下が設定例です。
-![Flow List](./sample/config/img/flowlist.png)
+![Flow List](./sample/AXIES2025/config/img/flowlist.png)
 
-![WorkFlow List](./sample/config/img/workflowlist.png)
+![WorkFlow List](./sample/AXIES2025/config/img/workflowlist.png)
 
 ### 設定
 
@@ -61,7 +61,7 @@ WEKO内でAdministration >  WorkFlow > FlowList・WorkFlow Listに移動し、Wo
 ```json
 {
   "weko_base_url": "https://weko.example.org",
-  "item_type_export": "../sample/config/ItemType_export_sample.zip",
+  "item_type_export": "../sample/AXIES2025/config/ItemType_export_sample.zip",
   "indexes": {
     "Example": "1234567890"
   },
@@ -85,7 +85,7 @@ WEKO内でAdministration >  WorkFlow > FlowList・WorkFlow Listに移動し、Wo
 | `publish_status` | 任意 | `.PUBLISH_STATUS` に設定する公開ステータス。`public`（公開、既定値）または `private`（非公開）のみ指定可能 |
 
 `Index` はメタデータの登録先となるWEKO上のコレクションです。対象WEKOのIndex管理画面で登録先のIndex名とIndexIDを確認し、`indexes` に設定してください。
-（メタデータの登録結果（[例](./sample/ResearchArtifact(40001).tsv)や、ワークフローの設定画面から確認できます）
+（メタデータの登録結果（[例](./sample/AXIES2025/ResearchArtifact(40001).tsv)や、ワークフローの設定画面から確認できます）
 
 `item_type_export` の相対パスは、`metadata_registration.json` があるディレクトリを基準に解決されます。`default_index` には、`indexes` に存在する名前を指定してください。
 
@@ -133,7 +133,7 @@ WEKOは、JPCOARのタイトル（`title`、言語属性付き）にマッピン
 
 出力TSVの1つのセルに入る値は131,072文字までです。WEKOはTSVの読み込み時にこれより長いセルを受け付けず、そのTSVのすべてのレコードが取り込めなくなるためです。リストの場合は要素ごとに数えます。この上限を超える値があると、生成はファイル名・行番号・列名を表示して停止します。行単位のエラー（`path:行番号:` 形式）の行番号はヘッダーを1行目として数えたレコード番号で、セル内に改行がある場合は物理的な行番号と一致しないことがあります。CSV/TSVとして読み取れない入力のエラー（`path: line N:` 形式）には物理的な行番号が表示されます。
 
-サンプルファイルは[こちら](./sample/sourcedata_sample.tsv)
+サンプルファイルは[こちら](./sample/AXIES2025/sourcedata_sample.tsv)
 
 ## メタデータファイルの生成
 
