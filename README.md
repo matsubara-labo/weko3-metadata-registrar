@@ -167,6 +167,8 @@ uv run python src/scripts/generate_metadata_imports.py \
 | `--overwrite` | 任意 | 無効 | 出力先にある既存の生成ファイルをすべて削除してから生成する |
 | `--skip-invalid-rows` | 任意 | 無効 | エラーのある行を除外して生成し、除外した行を `invalid_rows.tsv` に出力する |
 | `--strict-columns` | 任意 | 無効 | Item Typeにない列が入力にある場合、警告ではなくエラーとして停止する |
+| `--title-fallback LABEL=COLUMN` | 任意 | なし | タイトル項目が空の行を `<接頭辞> (LABEL: <COLUMNの値>)` で埋める。複数指定すると指定順に試す（後述） |
+| `--title-fallback-prefix TEXT` | 任意 | `NoTitle` | `--title-fallback` で埋めるタイトルの接頭辞 |
 
 `--delimiter auto` では、拡張子が `.tsv` ならタブ、`.csv` ならカンマとして読み込みます。それ以外の拡張子（`.txt` や拡張子なしなど）では、ヘッダー行（1行目）のタブとカンマの数で判定し、タブの方が多ければタブ、それ以外はカンマとして扱います。ヘッダーにItem Typeの項目名と一致する列が1つもない場合は、区切り文字の誤りとみなして生成を停止します。拡張子と実際の区切り文字が異なるファイル（例: タブ区切りの `.csv`）は `--delimiter tab` のように明示してください。
 
@@ -179,6 +181,18 @@ uv run python src/scripts/generate_metadata_imports.py \
 除外した行を登録し直すときは、`invalid_rows.tsv` の値を修正し、修正した行だけを入力として再実行してください。元の入力ファイルで再実行すると、生成済みのZIPで登録した行が重複して登録されます。`invalid_rows.tsv` はそのまま `--input` に指定できます（`_invalid_row` と `_invalid_reason` の列は生成時に無視されます）。出力先に前回の `invalid_rows.tsv` が残っていると生成は停止するため、移動・削除するか `--overwrite` を指定してください。`--input` に指定したファイルは、出力先にあっても `--overwrite` で削除されません。ただし修正後もエラーが残る行がある場合、そのファイルは新しい `invalid_rows.tsv` で上書きされます。
 
 エラーのある行がない場合、`invalid_rows.tsv` は作成されません。すべての行にエラーがある場合は `invalid_rows.tsv` だけを書き出し、TSV/ZIPは生成せずに終了コード1で終了します。このとき `--overwrite` を指定していても、前回生成したTSV/ZIPは削除されず、前回の `invalid_rows.tsv` だけが置き換えられます。
+
+`--title-fallback` を指定すると、タイトル項目が空（空白だけのセルや、`[]`・`['']`・`[None]` のように空でない要素がないリストを含む。必須項目の空判定と同じ）の行を、指定した列の値で埋めます。対象はJPCOARのタイトルにマッピングされた非表示でない項目のうち、Item Typeで最初の項目です（サンプルでは `Title`）。指定した順に列を調べ、最初に値のある列の最初の要素を使って `<接頭辞> (LABEL: <値>)` とします。たとえば次の指定では、`Title_r` があれば `NoTitle (R: DNAxiS)`、なければ `NoTitle (G: dnaxis)` になります。LLMなどでタイトルを生成できなかったレコードを、`NoTitle` で検索して特定できます。
+
+```shell
+uv run python src/scripts/generate_metadata_imports.py \
+  --input path/to/input.tsv \
+  --output-dir output/zip_data \
+  --title-fallback R=Title_r \
+  --title-fallback G=Title_g
+```
+
+生成を行う場合に、埋めた行を `filled title: <path>:<行番号>: <タイトル>` と表示し、最後に件数を表示します（エラーのある行があって生成を停止した場合は表示しません。`--skip-invalid-rows` では除外されなかった行だけを表示します）。埋めたタイトルの言語は、通常の値と同じく `<列名>_lang` 列または `default_languages` から決まります。指定する列はItem Typeの項目でなくても構いません。Item Typeにない列でも未知の列として警告されず、`--strict-columns` でも停止しません。指定した列が入力のヘッダーにない場合は、行を読む前に生成を停止します。どの列にも値がない行は埋めず、従来どおり必須項目が空の行単位のエラーになります。`invalid_rows.tsv` には埋める前の入力値を出力します。
 
 `--chunk-size`は一括登録時のエラー回避のためのものです。[v1.0.8の修正](https://nii-auth.atlassian.net/wiki/spaces/JAIROCloudWEKO3/pages/43549582/2025-07-02+v1.0.8)によって改修されたと思われますが、設定する事をお勧めします。
 

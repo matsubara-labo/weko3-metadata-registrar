@@ -13,6 +13,7 @@ if __package__ in (None, ""):
 
 from generation.metadata_pipeline import (
     DEFAULT_REGISTRATION_CONFIG_PATH,
+    DEFAULT_TITLE_FALLBACK_PREFIX,
     MetadataGenerationConfig,
     find_unrelated_zip_files,
     generate_metadata_artifacts,
@@ -27,6 +28,15 @@ def publish_date_argument(value: str) -> str:
             f"{value!r} is not a valid YYYY-MM-DD date, e.g. 2025-05-27"
         )
     return value
+
+
+def title_fallback_argument(value: str) -> tuple[str, str]:
+    label, separator, column = value.partition("=")
+    if not separator or not label.strip() or not column.strip():
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is not LABEL=COLUMN, e.g. R=Title_r"
+        )
+    return label.strip(), column.strip()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -95,6 +105,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Stop if the input has columns that are not ItemType fields. Without it, such columns are ignored with a warning.",
     )
+    parser.add_argument(
+        "--title-fallback",
+        type=title_fallback_argument,
+        action="append",
+        default=[],
+        metavar="LABEL=COLUMN",
+        help="Fill an empty title field with '<prefix> (LABEL: <first value of "
+        "COLUMN>)'. Repeat to try columns in order, e.g. --title-fallback "
+        "R=Title_r --title-fallback G=Title_g.",
+    )
+    parser.add_argument(
+        "--title-fallback-prefix",
+        default=DEFAULT_TITLE_FALLBACK_PREFIX,
+        help="Prefix of titles filled by --title-fallback "
+        f"(default: {DEFAULT_TITLE_FALLBACK_PREFIX}).",
+    )
     return parser
 
 
@@ -114,19 +140,29 @@ def main() -> int:
         overwrite=args.overwrite,
         skip_invalid_rows=args.skip_invalid_rows,
         strict_columns=args.strict_columns,
+        title_fallbacks=tuple(args.title_fallback),
+        title_fallback_prefix=args.title_fallback_prefix,
     )
     skipped: list[int] = []
+    filled: list[int] = []
 
     def report_invalid_rows(path: Path, count: int) -> None:
         skipped.append(count)
         print(f"skipped {count} invalid row(s); see {path}")
+
+    def report_title_filled(row_number: int, title: str) -> None:
+        filled.append(row_number)
+        print(f"filled title: {config.input_path}:{row_number}: {title}")
 
     artifacts = generate_metadata_artifacts(
         config,
         on_remove=lambda path: print(f"removed {path}"),
         on_invalid_rows=report_invalid_rows,
         on_warning=lambda message: print(f"warning: {message}"),
+        on_title_filled=report_title_filled,
     )
+    if filled:
+        print(f"filled {len(filled)} empty title(s) with --title-fallback")
     if skipped and not artifacts:
         print("No valid rows were found; no import files were generated.")
         return 1
