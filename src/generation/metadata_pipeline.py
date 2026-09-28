@@ -1119,10 +1119,6 @@ def generate_metadata_artifacts(
     )
     if errors and not config.skip_invalid_rows:
         raise MetadataInputError(format_row_errors(config.input_path, errors))
-    # Report fills only once rows are known to be generated.
-    if on_title_filled is not None:
-        for row_number, title in filled_titles:
-            on_title_filled(row_number, title)
     if not rows and not errors:
         return []
     # Read before any output is written: the input may be an invalid_rows.tsv
@@ -1179,6 +1175,11 @@ def generate_metadata_artifacts(
             )
         )
 
+    # Report fills only after every TSV/ZIP has been written, so a later
+    # I/O error never leaves "filled title" lines for files that do not exist.
+    if on_title_filled is not None:
+        for row_number, title in filled_titles:
+            on_title_filled(row_number, title)
     return artifacts
 
 

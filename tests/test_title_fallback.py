@@ -166,6 +166,21 @@ class TitleFallbackGenerationTests(unittest.TestCase):
 
         self.assertEqual(filled, [])
 
+    def test_fills_are_not_reported_when_writing_fails(self) -> None:
+        self._write_source(["Title", "Title_g"], [["[]", "repo"]])
+        filled: list[tuple[int, str]] = []
+
+        with (
+            mock.patch(
+                "generation.metadata_pipeline.write_tsv",
+                side_effect=OSError("disk full"),
+            ),
+            self.assertRaises(OSError),
+        ):
+            self._generate(filled, title_fallbacks=(("G", "Title_g"),))
+
+        self.assertEqual(filled, [])
+
     def test_invalid_rows_report_keeps_the_original_title(self) -> None:
         self._write_source(
             ["Title", "Title_g", "PublicationYear_g"],
