@@ -99,12 +99,17 @@ class RunImportLedgerTests(unittest.TestCase):
         self.zip_dir.mkdir(parents=True)
         self.download_dir = self.base_dir / "output" / "import_results"
         self.download_dir.mkdir(parents=True)
-        self.result_path = write_result(
-            self.download_dir / "List_Download_1.tsv",
+        self.downloads = 0
+        self.ledger_path = self.base_dir / "output" / "import_ledger.jsonl"
+
+    def download_result(self, *args, **kwargs) -> Path:
+        # Each WEKO download creates a new file, which run_import renames.
+        self.downloads += 1
+        return write_result(
+            self.download_dir / f"List_Download_{self.downloads}.tsv",
             EN_HEADER,
             [en_row(1), en_row(2)],
         )
-        self.ledger_path = self.base_dir / "output" / "import_ledger.jsonl"
 
     def config(self, **overrides) -> WekoImportConfig:
         return WekoImportConfig(
@@ -140,7 +145,7 @@ class RunImportLedgerTests(unittest.TestCase):
             patch.object(
                 selenium_auto_register,
                 "wait_for_download",
-                return_value=self.result_path,
+                side_effect=self.download_result,
             ),
             patch.object(selenium_auto_register, "DRIVER_RETRY_DELAY_SECONDS", 0),
             contextlib.redirect_stdout(output),
@@ -199,7 +204,9 @@ class RunImportLedgerTests(unittest.TestCase):
         self.assertEqual(self.statuses(), ["started", "succeeded"])
         record = read_ledger(self.ledger_path)[-1]
         self.assertEqual(record["zip_name"], "import.zip")
-        self.assertEqual(record["result_path"], str(self.result_path))
+        self.assertEqual(
+            record["result_path"], str(self.download_dir / "import_result.tsv")
+        )
 
     def test_rerun_with_same_content_is_skipped_unless_allowed(self) -> None:
         zip_path = write_import_zip(self.zip_dir / "import.zip", 2)

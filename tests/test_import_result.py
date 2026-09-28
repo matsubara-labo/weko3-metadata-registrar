@@ -24,6 +24,7 @@ from importers.selenium_auto_register import (
     driver_connection_lost,
     driver_session_lost,
     run_import,
+    store_result_file,
 )
 
 EN_HEADER = ["No.", "Start Date", "End Date", "Item ID", "Status", "Import Result"]
@@ -132,6 +133,51 @@ class SummaryTests(unittest.TestCase):
         self.assertFalse(self.summarize([], 0).succeeded)
 
 
+class StoreResultFileTests(unittest.TestCase):
+    def test_failed_rename_keeps_the_downloaded_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            downloaded = write_result(
+                Path(directory) / "List_Download_x.tsv", EN_HEADER, []
+            )
+            with (
+                patch.object(Path, "rename", side_effect=PermissionError("busy")),
+                contextlib.redirect_stdout(io.StringIO()) as output,
+            ):
+                stored = store_result_file(downloaded, Path("import_001.zip"))
+
+            self.assertEqual(stored, downloaded)
+            self.assertTrue(downloaded.exists())
+        self.assertIn("could not rename", output.getvalue())
+
+    def test_result_is_renamed_after_the_zip_without_overwriting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = store_result_file(
+                write_result(root / "List_Download_x.tsv", EN_HEADER, []),
+                Path("zips/import_001.zip"),
+            )
+            second = store_result_file(
+                write_result(root / "List_Download_y.csv", EN_HEADER, []),
+                Path("zips/import_001.zip"),
+            )
+            third = store_result_file(
+                write_result(root / "List_Download_z.tsv", EN_HEADER, []),
+                Path("zips/import_001.zip"),
+            )
+
+            self.assertEqual(first, root / "import_001_result.tsv")
+            self.assertEqual(second, root / "import_001_result.csv")
+            self.assertEqual(third, root / "import_001_result_001.tsv")
+            self.assertEqual(
+                sorted(path.name for path in root.iterdir()),
+                [
+                    "import_001_result.csv",
+                    "import_001_result.tsv",
+                    "import_001_result_001.tsv",
+                ],
+            )
+
+
 class RunImportResultTests(unittest.TestCase):
     def run_with_result(
         self, base_dir: Path, rows: list[list[str]], **config_overrides
@@ -176,6 +222,11 @@ class RunImportResultTests(unittest.TestCase):
             self.assertTrue(
                 (base_dir / "output" / "uploaded_zip_data" / "import.zip").exists()
             )
+            self.assertEqual(
+                outcome.imported[0][1],
+                base_dir / "output" / "import_results" / "import_result.tsv",
+            )
+            self.assertTrue(outcome.imported[0][1].exists())
         self.assertIn("result: success=2/2", output)
 
     def test_failure_moves_zip_to_failed_dir_without_retry(self) -> None:
@@ -192,6 +243,9 @@ class RunImportResultTests(unittest.TestCase):
                 (base_dir / "output" / "failed_zip_data" / "import.zip").exists()
             )
             self.assertFalse((base_dir / "output" / "uploaded_zip_data").exists())
+            self.assertTrue(
+                (base_dir / "output" / "import_results" / "import_result.tsv").exists()
+            )
         self.assertIn("success=1/2 failure=1 expected=2", output)
         self.assertIn("Error: failed", output)
         self.assertGreater(MAX_IMPORT_ATTEMPTS, 1)

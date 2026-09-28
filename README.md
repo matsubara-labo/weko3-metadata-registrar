@@ -320,7 +320,7 @@ WEKO上の既存アイテムを識別子（`corpusid` など）で検索して�
 
 ### 登録後のファイル
 
-インポートが完了すると、WEKOのResultタブからダウンロードした結果ファイル（TSV、またはWEKOの設定によりCSV）を `output/import_results` に保存し、その内容を検証します。次の条件をすべて満たす場合だけ、ZIPの登録に成功したとみなします。
+インポートが完了すると、WEKOのResultタブからダウンロードした結果ファイル（TSV、またはWEKOの設定によりCSV）を `output/import_results`（`--download-dir` で変更可能）に保存し、その内容を検証します。結果ファイルはZIPと対応が取れるように `<ZIP名>_result.tsv`（例: `import_001.zip` なら `import_001_result.tsv`）へ名前を変更します。同名のファイルがある場合は `import_001_result_001.tsv` のように連番を付け、上書きしません。インポート台帳の `result_path` には変更後のパスを記録します。次の条件をすべて満たす場合だけ、ZIPの登録に成功したとみなします。
 
 - 結果ファイルに1行以上のレコードがある
 - 結果ファイルのレコード数が、ZIP内のTSVに含まれるデータ行数（先頭セルが `#` で始まらない行）と一致する
@@ -338,7 +338,7 @@ WEKO上の既存アイテムを識別子（`corpusid` など）で検索して�
 
 失敗行がある場合、件数が一致しない場合、または結果ファイルを解析できない場合は、上記のオプションにかかわらずZIPを削除せず、元のディレクトリにも残さずに `output/failed_zip_data`（`--failed-zip-dir` で変更可能）へ移動します。同名のファイルがある場合は連番を付けて移動します。このとき成功件数・失敗件数・期待件数と、失敗行（最大20行）の No.、Item ID、ステータス、インポート結果を表示し、`ImportResultError` で処理を中断します。この場合は再試行しません。一部のレコードがすでに登録されている可能性があるため、WEKO上の登録状況と結果ファイルを確認してから、必要なレコードだけを再投入してください。
 
-コンソールに `imported=<zip-path> result=<download-path>` が表示され、結果ファイルが保存されていることを確認してください。登録対象がない場合は `No zip files were found to import.` と表示して終了します。登録対象のZIPがあっても `--limit 0` を指定した場合は、`No zip files were imported because --limit 0 was given.` と表示して終了します。登録対象のZIPがすべて台帳によりスキップされた場合は、`No zip files were imported; <件数> zip file(s) were skipped because they are already in the import ledger.` と表示して終了します。
+コンソールに `imported=<zip-path> result=<結果ファイルのパス>` が表示され、結果ファイルが保存されていることを確認してください。登録対象がない場合は `No zip files were found to import.` と表示して終了します。登録対象のZIPがあっても `--limit 0` を指定した場合は、`No zip files were imported because --limit 0 was given.` と表示して終了します。登録対象のZIPがすべて台帳によりスキップされた場合は、`No zip files were imported; <件数> zip file(s) were skipped because they are already in the import ledger.` と表示して終了します。
 
 ## 生成物の仕様
 
