@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from zoneinfo import ZoneInfo
 
 from generation.metadata_pipeline import (
     MetadataGenerationConfig,
@@ -96,6 +97,62 @@ class WekoDateTests(unittest.TestCase):
 
         self.assertEqual(row["Issued"], "2020-01-02")
         self.assertEqual(row["Dates"], ["2020-01-02", "2021"])
+
+    def test_offset_datetimes_take_the_date_in_japan_time(self) -> None:
+        row = normalize_row(
+            {
+                "Title": "t",
+                "Issued": "2020-04-02T21:11:47+00:00",
+                "Dates": "['2023-03-09T19:58:55Z', '2020-03-26T08:08:42+00:00', "
+                "'2020-01-02T08:00:00+09:00', '2020-01-02T20:00:00-05:00']",
+            },
+            _schema(),
+            DATE_FIELDS,
+        )
+
+        self.assertEqual(row["Issued"], "2020-04-03")
+        self.assertEqual(
+            row["Dates"], ["2023-03-10", "2020-03-26", "2020-01-02", "2020-01-03"]
+        )
+
+    def test_offset_datetimes_use_the_given_time_zone(self) -> None:
+        row = normalize_row(
+            {"Title": "t", "Issued": "2020-04-02T21:11:47+00:00"},
+            _schema(),
+            DATE_FIELDS,
+            ZoneInfo("UTC"),
+        )
+
+        self.assertEqual(row["Issued"], "2020-04-02")
+
+    def test_naive_datetimes_keep_their_date(self) -> None:
+        row = normalize_row(
+            {"Title": "t", "Issued": "2020-04-02T21:11:47"}, _schema(), DATE_FIELDS
+        )
+
+        self.assertEqual(row["Issued"], "2020-04-02")
+
+    def test_datetimes_out_of_range_after_conversion_are_row_errors(self) -> None:
+        for value in ("0001-01-01T00:00:00+09:00", "9999-12-31T23:00:00-05:00"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(MetadataInputError, "is not a WEKO date"):
+                    normalize_row(
+                        {"Title": "t", "Issued": value}, _schema(), DATE_FIELDS
+                    )
+
+    def test_load_rows_converts_with_the_given_time_zone(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            input_path = Path(temporary_directory) / "input.tsv"
+            input_path.write_text(
+                "Title\tIssued\nt\t2020-04-02T21:11:47Z\n", encoding="utf-8"
+            )
+            japan = load_rows(input_path, _schema(), DATE_FIELDS)
+            utc = load_rows(
+                input_path, _schema(), DATE_FIELDS, date_timezone=ZoneInfo("UTC")
+            )
+
+        self.assertEqual(japan[0]["Issued"], "2020-04-03")
+        self.assertEqual(utc[0]["Issued"], "2020-04-02")
 
     def test_invalid_dates_are_row_errors(self) -> None:
         for field_name, value in (

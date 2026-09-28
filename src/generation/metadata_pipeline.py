@@ -8,10 +8,11 @@ import re
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 from enum import Enum, auto
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .item_type import (
     ItemTypeField,
@@ -19,6 +20,7 @@ from .item_type import (
     load_item_type_export,
 )
 from .registration_config import (
+    DEFAULT_DATE_TIMEZONE,
     load_registration_settings,
     validate_publish_date,
     validate_publish_status,
@@ -196,6 +198,7 @@ def language_column(field_name: str) -> str:
 class _MetadataRuntime:
     schema: MetadataSchema
     date_like_fields: frozenset[str]
+    date_timezone: tzinfo
 
 
 @dataclass(frozen=True)
@@ -318,6 +321,7 @@ def _build_metadata_runtime(config: MetadataGenerationConfig) -> _MetadataRuntim
         date_like_fields=frozenset(
             field.name for field in item_type.fields if field.date_like
         ),
+        date_timezone=settings.date_timezone,
     )
 
 
@@ -354,8 +358,30 @@ def resolve_fixed_field_values(field: ItemTypeField, *, publish_date: str) -> li
     return [""] * len(field.values)
 
 
-def process_date(date_str: str) -> str:
-    return date_str.split("T", 1)[0]
+DEFAULT_DATE_TZINFO = ZoneInfo(DEFAULT_DATE_TIMEZONE)
+
+
+def process_date(date_str: str, date_timezone: tzinfo = DEFAULT_DATE_TZINFO) -> str:
+    """Reduce a date or datetime to the calendar date WEKO stores.
+
+    A datetime with a UTC offset is an instant, so it is converted to
+    ``date_timezone`` before its date is taken; otherwise the part after ``T``
+    is dropped as is.
+    """
+    date_part, separator, _ = date_str.partition("T")
+    if not separator:
+        return date_str
+    try:
+        moment = datetime.fromisoformat(date_str)
+    except ValueError:
+        return date_part
+    if moment.utcoffset() is None:
+        return date_part
+    try:
+        return moment.astimezone(date_timezone).date().isoformat()
+    except OverflowError:
+        # Out of datetime's range after conversion; reject it as a non-date.
+        return date_str
 
 
 WEKO_DATE_FORMATS = ("%Y-%m-%d", "%Y-%m", "%Y")
@@ -371,8 +397,10 @@ def is_weko_date(value: str) -> bool:
     return False
 
 
-def normalize_date(field_name: str, value: str) -> str:
-    date = process_date(value).strip()
+def normalize_date(
+    field_name: str, value: str, date_timezone: tzinfo = DEFAULT_DATE_TZINFO
+) -> str:
+    date = process_date(value.strip(), date_timezone).strip()
     if not is_weko_date(date):
         raise MetadataInputError(
             f"{field_name!r} value {value!r} is not a WEKO date "
@@ -483,6 +511,7 @@ def normalize_row(
     source_row: dict[str, Any],
     schema: MetadataSchema,
     date_like_fields: frozenset[str] = frozenset(),
+    date_timezone: tzinfo = DEFAULT_DATE_TZINFO,
 ) -> dict[str, str | list[str]]:
     normalized: dict[str, str | list[str]] = {}
     for field_name in schema.column_bindings:
@@ -499,7 +528,9 @@ def normalize_row(
                 f"{field_name!r} accepts a single value but got {len(values)}"
             )
         if field_name in date_like_fields:
-            values = [normalize_date(field_name, value) for value in values]
+            values = [
+                normalize_date(field_name, value, date_timezone) for value in values
+            ]
         if repeatable:
             normalized[field_name] = values
         else:
@@ -672,6 +703,7 @@ def load_rows(
     *,
     strict_columns: bool = False,
     on_warning: Callable[[str], None] | None = None,
+    date_timezone: tzinfo = DEFAULT_DATE_TZINFO,
 ) -> list[dict[str, Any]]:
     rows, errors = load_rows_with_errors(
         input_path,
@@ -680,6 +712,7 @@ def load_rows(
         delimiter,
         strict_columns=strict_columns,
         on_warning=on_warning,
+        date_timezone=date_timezone,
     )
     if errors:
         raise MetadataInputError(format_row_errors(input_path, errors))
@@ -694,6 +727,7 @@ def load_rows_with_errors(
     *,
     strict_columns: bool = False,
     on_warning: Callable[[str], None] | None = None,
+    date_timezone: tzinfo = DEFAULT_DATE_TZINFO,
 ) -> tuple[list[dict[str, Any]], list[RowError]]:
     if not input_path.exists():
         raise FileNotFoundError(f"Input file was not found: {input_path}")
@@ -727,7 +761,9 @@ def load_rows_with_errors(
                 errors: list[RowError] = []
                 for row_number, row in enumerate(reader, start=2):
                     try:
-                        rows.append(normalize_row(row, schema, date_like_fields))
+                        rows.append(
+                            normalize_row(row, schema, date_like_fields, date_timezone)
+                        )
                     except MetadataInputError as exc:
                         cells = {name: row.get(name) or "" for name in fieldnames}
                         errors.append(RowError(row_number, str(exc), cells))
@@ -959,6 +995,7 @@ def generate_metadata_artifacts(
         resolve_delimiter(config.delimiter),
         strict_columns=config.strict_columns,
         on_warning=on_warning,
+        date_timezone=runtime.date_timezone,
     )
     if errors and not config.skip_invalid_rows:
         raise MetadataInputError(format_row_errors(config.input_path, errors))
