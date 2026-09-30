@@ -135,6 +135,19 @@ LANGUAGE_COLUMN_SUFFIX = "_lang"
 WEKO_TITLE_ERROR = "Title is required item."
 DEFAULT_TITLE_FALLBACK_PREFIX = "NoTitle"
 
+# Control characters WEKO must not receive: its Python 3.6 csv reader fails on
+# NUL with an internal server error, and the others are stored as broken text
+# (and are invalid in XML). TAB, LF and CR are legitimate.
+FORBIDDEN_CONTROL_CHARACTERS = "\x00-\x08\x0b\x0c\x0e-\x1f\x7f"
+FORBIDDEN_CONTROL_PATTERN = re.compile(f"[{FORBIDDEN_CONTROL_CHARACTERS}]")
+# A lone surrogate (e.g. from a "\\ud800" escape) cannot be written as UTF-8.
+SURROGATE_PATTERN = re.compile("[\ud800-\udfff]")
+REPAIR_HINT = "repair the input with src/scripts/repair_control_chars.py"
+MANUAL_FIX_HINT = (
+    "repair_control_chars.py only rewrites list elements, so fix the cell by "
+    "hand or pass --skip-invalid-rows"
+)
+
 # Largest limit accepted on every platform (sys.maxsize overflows on Windows).
 INPUT_FIELD_SIZE_LIMIT = 2**31 - 1
 
@@ -447,13 +460,40 @@ def detect_delimiter(path: Path) -> str:
     return "\t" if header.count("\t") > header.count(",") else ","
 
 
+def reject_control_characters(value: str, *, list_element: bool = False) -> str:
+    """Raise if value holds a character WEKO must not receive.
+
+    Called before strip(), which would silently drop a leading or trailing
+    one, e.g. the decoded "\\infty" of "\\infty-Diff". list_element marks a
+    value decoded from a list literal, the only kind the repair script fixes.
+    """
+    for pattern, kind in (
+        (FORBIDDEN_CONTROL_PATTERN, "control character"),
+        (SURROGATE_PATTERN, "lone surrogate"),
+    ):
+        match = pattern.search(value)
+        if match is None:
+            continue
+        hint = (
+            REPAIR_HINT
+            if list_element and kind == "control character"
+            else MANUAL_FIX_HINT
+        )
+        raise MetadataInputError(
+            f"value contains {kind} U+{ord(match.group(0)):04X} at position "
+            f"{match.start()} ({value[: match.start()][-20:]!r}...); WEKO cannot "
+            f"import it, {hint}"
+        )
+    return value
+
+
 def parse_literal_list(raw_value: Any) -> list[str]:
     if raw_value in (None, ""):
         return []
     if isinstance(raw_value, list):
-        return [str(value).strip() for value in raw_value]
+        return [reject_control_characters(str(value)).strip() for value in raw_value]
 
-    text = str(raw_value).strip()
+    text = reject_control_characters(str(raw_value)).strip()
     if not text:
         return []
 
@@ -472,7 +512,7 @@ def parse_literal_list(raw_value: Any) -> list[str]:
         if value is None:
             values.append("")
         elif isinstance(value, str):
-            values.append(value.strip())
+            values.append(reject_control_characters(value, list_element=True).strip())
         else:
             raise MetadataInputError(
                 f"List element {value!r} is of type {type(value).__name__}; "
