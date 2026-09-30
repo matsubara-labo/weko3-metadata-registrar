@@ -98,14 +98,20 @@ class RepairValueTests(unittest.TestCase):
 
 class SuspectLfTests(unittest.TestCase):
     def test_lf_before_latex_n_commands_is_reported(self) -> None:
-        found = find_suspect_lf_commands("viscosity $\nu$ and \nabla f, x \neq y")
+        found = find_suspect_lf_commands(
+            "viscosity $\nu$ and \nabla f, x \neq y, a \nleftarrow b, \nolimits"
+        )
         self.assertEqual(
-            [command for command, _ in found], ["\\nu", "\\nabla", "\\neq"]
+            [command for command, _ in found],
+            ["\\nu", "\\nabla", "\\neq", "\\nleftarrow", "\\nolimits"],
         )
         self.assertIn("\nu$", found[0][1])
 
     def test_ordinary_line_breaks_are_not_reported(self) -> None:
-        text = "Usage:\ne.g. run it\ni.e. done\nnumpy\nnode\nnot yet\n\nuse"
+        text = (
+            "Usage:\ne.g. run it\ni.e. done\nnumpy\nnode\nnot yet\n\nuse\n"
+            "eg. this, computed in\nparallel, a\nsubset, there\nexists, \nmid-2020"
+        )
         self.assertEqual(find_suspect_lf_commands(text), [])
 
 

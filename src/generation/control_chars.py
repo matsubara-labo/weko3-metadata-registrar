@@ -59,11 +59,15 @@ BROKEN_TAB_COMMAND = re.compile(
 BROKEN_CR_COMMAND = re.compile(r"\r([A-Za-z])")
 RESTORABLE_CATEGORIES = frozenset("LMNS")
 # LaTeX commands starting with "\n" whose decoded LF should be reviewed.
-# Short names such as \ne or \ni are left out: a line starting with "e.g."
-# or "i.e." would match them.
+# Names that are also English words or prefixes at the start of a wrapped
+# line (\ne, \ni, \neg "eg.", \nexists, \nmid, \nparallel, \nsubset,
+# \nsim, \ncong) are left out: prose such as "computed in\nparallel" would
+# match them.
 SUSPECT_LF_COMMAND = re.compile(
-    r"\n(u|abla|eq|ot|ewline|ewcommand|ewpage|orm|ull|oindent|onumber|obreak"
-    r"|exists|mid|parallel|leq|geq|atural|eg|subseteq|subset|otin|cong|sim)"
+    r"\n(u|abla|eq|ot|otin|orm|ull|atural|leq|geq|less|gtr|vdash"
+    r"|leftarrow|rightarrow|Leftarrow|Rightarrow|earrow|warrow"
+    r"|ewline|ewcommand|ewpage|ewtheorem|ewenvironment"
+    r"|oindent|onumber|obreak|olimits|ormalsize|ormalfont)"
     r"(?![A-Za-z])"
 )
 
