@@ -225,26 +225,41 @@ def _repair_row(
     return repairs
 
 
+def _write_tsv_atomically(
+    path: Path, header: list[str], rows: list[list[object]]
+) -> None:
+    """Write a UTF-8 BOM TSV via a temporary file, so a failure keeps the old one."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_name(f".{path.name}.tmp")
+    try:
+        with temporary_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+            writer = csv.writer(file_obj, delimiter="\t", lineterminator="\n")
+            writer.writerow(header)
+            writer.writerows(rows)
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
 def write_repair_report(repairs: list[CellRepair], report_path: Path) -> None:
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    with report_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
-        writer = csv.writer(file_obj, delimiter="\t", lineterminator="\n")
-        writer.writerow(
-            ["record_no", "id", "column", "list_index", "rules", "before", "after"]
-        )
-        for repair in repairs:
-            writer.writerow(
-                [
-                    repair.record_number,
-                    repair.record_id,
-                    repair.column,
-                    repair.index,
-                    ",".join(repair.rules),
-                    # repr makes the control characters in "before" visible.
-                    repr(repair.before),
-                    repair.after,
-                ]
-            )
+    rows: list[list[object]] = [
+        [
+            repair.record_number,
+            repair.record_id,
+            repair.column,
+            repair.index,
+            ",".join(repair.rules),
+            # repr makes the control characters in "before" visible.
+            repr(repair.before),
+            repair.after,
+        ]
+        for repair in repairs
+    ]
+    _write_tsv_atomically(
+        report_path,
+        ["record_no", "id", "column", "list_index", "rules", "before", "after"],
+        rows,
+    )
 
 
 def count_rules(repairs: list[CellRepair]) -> Counter[str]:

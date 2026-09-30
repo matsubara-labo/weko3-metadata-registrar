@@ -201,6 +201,23 @@ class RepairFileTests(unittest.TestCase):
         )
 
 
+class ReportWriteTests(unittest.TestCase):
+    def test_failed_report_write_keeps_the_previous_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory) / "report.tsv"
+            report.write_text("previous", encoding="utf-8")
+            with (
+                mock.patch("csv.writer", side_effect=OSError("disk full")),
+                self.assertRaises(OSError),
+            ):
+                write_repair_report([], report)
+
+            self.assertEqual(report.read_text(encoding="utf-8"), "previous")
+            self.assertEqual(
+                sorted(path.name for path in Path(directory).iterdir()), ["report.tsv"]
+            )
+
+
 class RepairCliTests(unittest.TestCase):
     def run_main(self, *args: str) -> tuple[int, str]:
         with (
