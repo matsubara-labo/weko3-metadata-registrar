@@ -196,6 +196,24 @@ class ControlCharacterTests(unittest.TestCase):
                 ):
                     normalize_row(row, _schema())
 
+    def test_hint_depends_on_whether_the_repair_script_can_fix_it(self) -> None:
+        cases = {
+            "['a\\x00b']": "repair_control_chars.py$",
+            "plain\x1fvalue": "fix the cell by hand",
+            # A real NUL makes literal_eval fail, so the cell is plain text.
+            "['a\x00b']": "fix the cell by hand",
+        }
+        for raw, hint in cases.items():
+            with self.subTest(raw=raw):
+                with self.assertRaisesRegex(MetadataInputError, hint):
+                    normalize_row({"Title": raw}, _schema())
+
+    def test_lone_surrogates_are_row_errors(self) -> None:
+        with self.assertRaisesRegex(
+            MetadataInputError, r"'Title': value contains lone surrogate U\+D800"
+        ):
+            normalize_row({"Title": "['\\ud800x']"}, _schema())
+
     def test_edges_are_checked_before_strip(self) -> None:
         # strip() would silently turn "\x1diff" into "iff".
         with self.assertRaisesRegex(MetadataInputError, r"'Title': .*U\+001D"):
