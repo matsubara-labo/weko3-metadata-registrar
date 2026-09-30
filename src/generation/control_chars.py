@@ -15,6 +15,9 @@ R2  LaTeX \\a \\b \\f \\v became BEL/BS/FF/VT: before a letter -> "\\a" etc.
 R3  "\\t" and "\\r" became TAB/CR: TAB before a known LaTeX command name and
     CR before any letter -> "\\t"/"\\r".
 R4  Any other control character -> the visible text "\\xNN".
+
+A decoded "\\n" (LaTeX \\nu, \\nabla, ...) leaves LF, which cannot be told from
+a real line break, so it is only reported for review and never changed.
 """
 
 from __future__ import annotations
@@ -55,6 +58,14 @@ BROKEN_TAB_COMMAND = re.compile(
 # (e.g. \rho, or a path such as '\result').
 BROKEN_CR_COMMAND = re.compile(r"\r([A-Za-z])")
 RESTORABLE_CATEGORIES = frozenset("LMNS")
+# LaTeX commands starting with "\n" whose decoded LF should be reviewed.
+# Short names such as \ne or \ni are left out: a line starting with "e.g."
+# or "i.e." would match them.
+SUSPECT_LF_COMMAND = re.compile(
+    r"\n(u|abla|eq|ot|ewline|ewcommand|ewpage|orm|ull|oindent|onumber|obreak"
+    r"|exists|mid|parallel|leq|geq|atural|eg|subseteq|subset|otin|cong|sim)"
+    r"(?![A-Za-z])"
+)
 
 
 @dataclass(frozen=True)
@@ -66,6 +77,26 @@ class CellRepair:
     rules: tuple[str, ...]
     before: str
     after: str
+
+
+@dataclass(frozen=True)
+class ReviewItem:
+    """A list element that may hide a decoded "\\n"; it is not changed."""
+
+    record_number: int
+    record_id: str
+    column: str
+    index: int
+    command: str
+    context: str
+
+
+def find_suspect_lf_commands(value: str) -> list[tuple[str, str]]:
+    """Return (command, context) for each LF followed by a \\n... command."""
+    return [
+        ("\\n" + match.group(1), value[max(0, match.start() - 20) : match.end() + 20])
+        for match in SUSPECT_LF_COMMAND.finditer(value)
+    ]
 
 
 def repair_value(value: str) -> tuple[str, tuple[str, ...]]:
@@ -154,8 +185,11 @@ def repair_file(
     delimiter: str = "auto",
     id_column: str | None = "corpusid",
     keep_mtime: bool = True,
+    reviews: list[ReviewItem] | None = None,
 ) -> list[CellRepair]:
     """Write input_path to output_path with list cells repaired.
+
+    List elements that may hide a decoded "\\n" are appended to reviews.
 
     Record numbers count the header as 1 and skip blank lines, like the
     generator's row errors. The output is written to a temporary file and
@@ -192,7 +226,9 @@ def repair_file(
                         writer.writerow(cells)
                         continue
                     record_number += 1
-                    repairs.extend(_repair_row(cells, header, record_number, id_index))
+                    repairs.extend(
+                        _repair_row(cells, header, record_number, id_index, reviews)
+                    )
                     writer.writerow(cells)
         os.replace(temporary_path, output_path)
     finally:
@@ -205,7 +241,11 @@ def repair_file(
 
 
 def _repair_row(
-    cells: list[str], header: list[str], record_number: int, id_index: int | None
+    cells: list[str],
+    header: list[str],
+    record_number: int,
+    id_index: int | None,
+    reviews: list[ReviewItem] | None = None,
 ) -> list[CellRepair]:
     """Repair cells in place and return what changed."""
     record_id = (
@@ -213,11 +253,20 @@ def _repair_row(
     )
     repairs: list[CellRepair] = []
     for position, cell in enumerate(cells):
+        column = header[position] if position < len(header) else ""
+        if reviews is not None:
+            for index, element in enumerate(_literal_list(cell) or []):
+                if isinstance(element, str):
+                    reviews.extend(
+                        ReviewItem(
+                            record_number, record_id, column, index, command, context
+                        )
+                        for command, context in find_suspect_lf_commands(element)
+                    )
         new_cell, changes = repair_cell(cell)
         if not changes:
             continue
         cells[position] = new_cell
-        column = header[position] if position < len(header) else ""
         repairs.extend(
             CellRepair(record_number, record_id, column, index, rules, before, after)
             for index, rules, before, after in changes
@@ -258,6 +307,25 @@ def write_repair_report(repairs: list[CellRepair], report_path: Path) -> None:
     _write_tsv_atomically(
         report_path,
         ["record_no", "id", "column", "list_index", "rules", "before", "after"],
+        rows,
+    )
+
+
+def write_review_report(reviews: list[ReviewItem], review_path: Path) -> None:
+    rows: list[list[object]] = [
+        [
+            review.record_number,
+            review.record_id,
+            review.column,
+            review.index,
+            review.command,
+            repr(review.context),
+        ]
+        for review in reviews
+    ]
+    _write_tsv_atomically(
+        review_path,
+        ["record_no", "id", "column", "list_index", "command", "context"],
         rows,
     )
 

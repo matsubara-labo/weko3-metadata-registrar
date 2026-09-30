@@ -9,7 +9,9 @@ from pathlib import Path
 from unittest import mock
 
 from generation.control_chars import (
+    ReviewItem,
     count_rules,
+    find_suspect_lf_commands,
     repair_cell,
     repair_file,
     repair_value,
@@ -94,6 +96,19 @@ class RepairValueTests(unittest.TestCase):
         self.assertEqual(repair_value("the \x1e\x00b0P\x00b0 regime")[1], ("R1", "R4"))
 
 
+class SuspectLfTests(unittest.TestCase):
+    def test_lf_before_latex_n_commands_is_reported(self) -> None:
+        found = find_suspect_lf_commands("viscosity $\nu$ and \nabla f, x \neq y")
+        self.assertEqual(
+            [command for command, _ in found], ["\\nu", "\\nabla", "\\neq"]
+        )
+        self.assertIn("\nu$", found[0][1])
+
+    def test_ordinary_line_breaks_are_not_reported(self) -> None:
+        text = "Usage:\ne.g. run it\ni.e. done\nnumpy\nnode\nnot yet\n\nuse"
+        self.assertEqual(find_suspect_lf_commands(text), [])
+
+
 class RepairCellTests(unittest.TestCase):
     def test_list_cell_is_rewritten_and_parses_to_the_repaired_values(self) -> None:
         cell = "['L. Moro-Vel\\x00e1zquez', None, 'kept']"
@@ -149,6 +164,27 @@ class RepairFileTests(unittest.TestCase):
         rows = self.rows(self.output)
         self.assertEqual(rows[:2], self.rows(self.input)[:2])
         self.assertEqual(parse_literal_list(rows[2][2]), ["Velázquez", "P. \\x7fz"])
+
+    def test_suspect_lf_is_reviewed_but_not_changed(self) -> None:
+        with self.input.open("a", encoding="utf-8", newline="") as file_obj:
+            csv.writer(file_obj, delimiter="\t", lineterminator="\n").writerow(
+                ["33", "['viscosity $\\nu$']", "['Ada']"]
+            )
+        reviews: list[ReviewItem] = []
+
+        repairs = repair_file(self.input, self.output, reviews=reviews)
+
+        self.assertEqual(
+            [
+                (r.record_number, r.record_id, r.column, r.index, r.command)
+                for r in reviews
+            ],
+            [(4, "33", "Title", 0, "\\nu")],
+        )
+        self.assertNotIn(4, {repair.record_number for repair in repairs})
+        self.assertEqual(
+            parse_literal_list(self.rows(self.output)[3][1]), ["viscosity $\nu$"]
+        )
 
     def test_modification_time_is_copied_unless_disabled(self) -> None:
         repair_file(self.input, self.output)
@@ -244,6 +280,8 @@ class RepairCliTests(unittest.TestCase):
 
             self.assertEqual(code, 0)
             self.assertTrue((root / "fixed_repairs.tsv").exists())
+            self.assertTrue((root / "fixed_review.tsv").exists())
+            self.assertIn("(0 LF before a LaTeX", printed)
             self.assertIn(
                 "repaired 1 list element(s) in 1 record(s) (rules: R1=1)", printed
             )
@@ -265,6 +303,12 @@ class RepairCliTests(unittest.TestCase):
                 ("--output", str(source)),
                 ("--output", str(root / "foo.tsv"), "--overwrite"),
                 ("--output", str(root / "x.tsv"), "--report", str(root / "x.tsv")),
+                (
+                    "--output",
+                    str(root / "y.tsv"),
+                    "--review",
+                    str(root / "y_repairs.tsv"),
+                ),
             ]
             for extra in cases:
                 with self.subTest(extra=extra):
