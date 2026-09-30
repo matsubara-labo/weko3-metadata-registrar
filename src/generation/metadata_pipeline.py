@@ -135,6 +135,12 @@ LANGUAGE_COLUMN_SUFFIX = "_lang"
 WEKO_TITLE_ERROR = "Title is required item."
 DEFAULT_TITLE_FALLBACK_PREFIX = "NoTitle"
 
+# Control characters WEKO must not receive: its Python 3.6 csv reader fails on
+# NUL with an internal server error, and the others are stored as broken text
+# (and are invalid in XML). TAB, LF and CR are legitimate.
+FORBIDDEN_CONTROL_CHARACTERS = "\x00-\x08\x0b\x0c\x0e-\x1f\x7f"
+FORBIDDEN_CONTROL_PATTERN = re.compile(f"[{FORBIDDEN_CONTROL_CHARACTERS}]")
+
 # Largest limit accepted on every platform (sys.maxsize overflows on Windows).
 INPUT_FIELD_SIZE_LIMIT = 2**31 - 1
 
@@ -447,13 +453,30 @@ def detect_delimiter(path: Path) -> str:
     return "\t" if header.count("\t") > header.count(",") else ","
 
 
+def reject_control_characters(value: str) -> str:
+    """Raise if value holds a character WEKO must not receive.
+
+    Called before strip(), which would silently drop a leading or trailing
+    one, e.g. the decoded "\\infty" of "\\infty-Diff".
+    """
+    match = FORBIDDEN_CONTROL_PATTERN.search(value)
+    if match is not None:
+        raise MetadataInputError(
+            f"value contains control character U+{ord(match.group(0)):04X} at "
+            f"position {match.start()} ({value[: match.start()][-20:]!r}...); "
+            "WEKO cannot import it, repair the input with "
+            "src/scripts/repair_control_chars.py"
+        )
+    return value
+
+
 def parse_literal_list(raw_value: Any) -> list[str]:
     if raw_value in (None, ""):
         return []
     if isinstance(raw_value, list):
-        return [str(value).strip() for value in raw_value]
+        return [reject_control_characters(str(value)).strip() for value in raw_value]
 
-    text = str(raw_value).strip()
+    text = reject_control_characters(str(raw_value)).strip()
     if not text:
         return []
 
@@ -472,7 +495,7 @@ def parse_literal_list(raw_value: Any) -> list[str]:
         if value is None:
             values.append("")
         elif isinstance(value, str):
-            values.append(value.strip())
+            values.append(reject_control_characters(value).strip())
         else:
             raise MetadataInputError(
                 f"List element {value!r} is of type {type(value).__name__}; "

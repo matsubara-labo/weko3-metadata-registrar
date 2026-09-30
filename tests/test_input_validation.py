@@ -182,6 +182,52 @@ class WekoDateTests(unittest.TestCase):
         self.assertEqual(row["Note"], "2020/01/02")
 
 
+class ControlCharacterTests(unittest.TestCase):
+    def test_list_elements_and_plain_values_are_rejected(self) -> None:
+        rows = {
+            "list element": {"Title": "['Moro-Vel\\x00e1zquez']"},
+            "plain value": {"Title": "t", "Note": "bad\x1fnote"},
+            "unparsable list": {"Title": "t", "Note": "[bad\x00"},
+        }
+        for case, row in rows.items():
+            with self.subTest(case=case):
+                with self.assertRaisesRegex(
+                    MetadataInputError, r"control character U\+00(00|1F)"
+                ):
+                    normalize_row(row, _schema())
+
+    def test_edges_are_checked_before_strip(self) -> None:
+        # strip() would silently turn "\x1diff" into "iff".
+        with self.assertRaisesRegex(MetadataInputError, r"'Title': .*U\+001D"):
+            normalize_row({"Title": "['\\x1diff: Infinite']"}, _schema())
+
+    def test_tab_lf_and_cr_are_allowed(self) -> None:
+        for raw, value in (
+            ("['a\\tb']", "a\tb"),
+            ("['line\\nnext']", "line\nnext"),
+            ("['x\\r\\ny']", "x\r\ny"),
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(
+                    normalize_row({"Title": raw}, _schema())["Title"], value
+                )
+
+    def test_bad_rows_are_row_errors_with_the_field_name(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input.tsv"
+            path.write_text(
+                "Title\tNote\nok\tfine\n['a\\x00b']\tfine\n", encoding="utf-8"
+            )
+            rows, errors = load_rows_with_errors(path, _schema())
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual([error.row_number for error in errors], [3])
+        self.assertIn(
+            "'Title': value contains control character U+0000", errors[0].message
+        )
+        self.assertIn("repair_control_chars.py", errors[0].message)
+
+
 class ColumnCheckTests(unittest.TestCase):
     def _load(self, header: str, **kwargs) -> tuple[list[str], list[object]]:
         warnings: list[str] = []

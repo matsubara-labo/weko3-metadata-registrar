@@ -31,14 +31,15 @@ from pathlib import Path
 from typing import Any
 
 from .metadata_pipeline import (
+    FORBIDDEN_CONTROL_PATTERN,
     INPUT_FIELD_SIZE_LIMIT,
     detect_delimiter,
     resolve_delimiter,
 )
 
-# Control characters that break WEKO or XML; TAB, LF and CR are legitimate.
-CONTROL_CHARACTERS = "\x00-\x08\x0b\x0c\x0e-\x1f\x7f"
-CONTROL_PATTERN = re.compile(f"[{CONTROL_CHARACTERS}]")
+# The generator rejects exactly what R4 makes visible.
+CONTROL_PATTERN = FORBIDDEN_CONTROL_PATTERN
+
 # \x07 \x08 \x0b \x0c are left to R2: LaTeX \vec, \backslash or \face would
 # otherwise read as U+0BEC, U+08AC or U+0CAC.
 BROKEN_UNICODE_ESCAPE = re.compile(r"([\x00-\x06\x0e-\x1f])([0-9a-fA-F]{2})")
