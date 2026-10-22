@@ -1,9 +1,9 @@
 {
-  "weko_base_url": "https://133.167.95.87",
+  "weko_base_url": "https://scholar.jp",
   "item_type_export": "config/ItemType_export_sample.zip",
   "indexes": {
-    "S2ORC": "1623632832836",
-    "PWCD": "1776751280302"
+    "S2ORC": "1791438938861",
+    "PWCD": "1791438796587"
   },
   "default_index": "S2ORC",
   "publish_date": "2025-05-27",
